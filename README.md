@@ -6,7 +6,7 @@ Images are processed asynchronously using Laravel’s queue system.
 ---
 
 ## Installation
-Clone GitHub repository into ``plugins/mercator/queuedresize``
+Clone GitHub repository into ``plugins/mercator/qresize``
 
 ```bash
 composer require intervention/image
@@ -46,27 +46,27 @@ Keep it running via systemd or another process manager if you want it persistent
 ### Resize an image
 
 ```twig
-{{ 'media/gallery/photo.jpg' | queued_resize(1200, 800) }}
+{{ 'media/gallery/photo.jpg' | q_resize(1200, 800) }}
 ```
 
 ### Crop and fill
 
 ```twig
-{{ 'media/gallery/photo.jpg' | queued_resize(800, 800, { mode: 'crop' }) }}
-{{ 'media/gallery/photo.jpg' | queued_resize(800, 800, { mode: 'fill', bg: '#ffffff' }) }}
+{{ 'media/gallery/photo.jpg' | q_resize(800, 800, { mode: 'crop' }) }}
+{{ 'media/gallery/photo.jpg' | q_resize(800, 800, { mode: 'fill', bg: '#ffffff' }) }}
 ```
 
 ### Just set width or height
 
 ```twig
-{{ 'media/gallery/photo.jpg' | queued_resize(1200) }}       {# width only #}
-{{ 'media/gallery/photo.jpg' | queued_resize(null, 800) }}  {# height only #}
+{{ 'media/gallery/photo.jpg' | q_resize(1200) }}       {# width only #}
+{{ 'media/gallery/photo.jpg' | q_resize(null, 800) }}  {# height only #}
 ```
 
 ### WebP or format override
 
 ```twig
-{{ 'media/gallery/photo.jpg' | queued_resize(1200, null, { format: 'webp' }) }}
+{{ 'media/gallery/photo.jpg' | q_resize(1200, null, { format: 'webp' }) }}
 ```
 
 ---
@@ -81,13 +81,13 @@ $url = $resizer->resize('media/gallery/photo.jpg', 1200, 800, ['mode' => 'fit'])
 echo $url;
 ```
 
-The method returns a queued resize URL like:
+The method returns a q resize URL like:
 
 ```
-https://example.com/queuedresize/ab12cd34ef56...
+https://example.com/qresize/ab12cd34ef56...
 ```
 
-On first access the job is queued and returns HTTP 202 until finished.
+On first access the job is q and returns HTTP 202 until finished.
 Once processed, the resized file is served from `storage/app/resized/`.
 
 ---
