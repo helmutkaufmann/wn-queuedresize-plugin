@@ -1,8 +1,8 @@
 <?php namespace Mercator\QueuedResize\Classes;
 
 use Illuminate\Support\Facades\Storage;
-use Intervention\Image\ImageManager; // v3
-use Intervention\Image\Drivers\Gd\Driver as GdDriver; // oder Imagick
+use Intervention\Image\ImageManager; 
+use Intervention\Image\Drivers\Gd\Driver as GdDriver; 
 use Intervention\Image\Drivers\Imagick\Driver as ImDriver;
 
 class ImageResizer

@@ -1,4 +1,5 @@
 <?php
+
 use Illuminate\Support\Facades\Route;
 use Mercator\QueuedResize\Classes\ImageResizer;
 use Mercator\QueuedResize\Jobs\ProcessImageResize;
@@ -8,17 +9,17 @@ Route::get("/queuedresize/{hash}", function (string $hash) {
     $r = app(ImageResizer::class);
     $out = $r->cachedPathFromHash($hash);
 
-    // 1) Bereits vorhanden?
+    // 1) Already resized?
     if (is_file($out)) {
         return response()->file($out, ["Cache-Control" => "public, max-age=31536000"]);
     }
 
-    // 2) Meta laden
+    // 2) Load meta data
     $metaFile = storage_path("app/resized/meta/" . $hash . ".json");
     $meta = is_file($metaFile) ? json_decode(file_get_contents($metaFile), true) : null;
 
     if ($meta) {
-        // 3) Sync-Fallback (erzwingt Erzeugung ohne Queue)
+        // 3) Fall-back.... no queue
         try {
             $r->resizeNow($meta["src"] ?? "", $meta["w"] ?? null, $meta["h"] ?? null, $meta["opts"] ?? []);
         } catch (\Throwable $e) {
@@ -40,19 +41,19 @@ Route::get("/queuedresize/{hash}", function (string $hash) {
             ]);
         }
     } else {
-        // kein Meta → kein Wissen über Parameter
+        // No meta data
         return response("Accepted", 202, [
             "Cache-Control" => "no-cache, private",
             "Retry-After" => "5",
         ]);
     }
 
-    // 4) Ausliefern (nach erfolgreicher Sync-Erzeugung)
+    // 4) Deliver teh resized image
     if (is_file($out)) {
         return response()->file($out, ["Cache-Control" => "public, max-age=31536000"]);
     }
 
-    // Falls ungewöhnlich immer noch nicht da:
+    // In case it is not yet there in exeptional cases...
     return response("Accepted", 202, [
         "Cache-Control" => "no-cache, private",
         "Retry-After" => "5",

@@ -3,8 +3,7 @@
   "type": "winter-plugin",
   "require": {
     "php": ">=8.0",
-    "winter/storm": "^1.2",
-    "intervention/image": "^2.7"
+    "intervention/image": ""
   },
   "autoload": {
     "psr-4": {
