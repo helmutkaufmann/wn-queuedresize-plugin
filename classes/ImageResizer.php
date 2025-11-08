@@ -62,7 +62,7 @@ class ImageResizer
         $H = $h && $h > 0 ? $h : null;
 
         $mode = $opts["mode"] ?? "auto";
-        $quality = (int) ($opts["quality"] ?? 82);
+        $quality = (int) ($opts["quality"] ?? 60);
         $upsize = (bool) ($opts["upsize"] ?? false);
 
         // --- apply transformation safely ---
