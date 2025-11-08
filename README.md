@@ -6,10 +6,10 @@ Images are processed asynchronously using Laravel’s queue system.
 ---
 
 ## Installation
+Clone GitHub repository into ``plugins/mercator/queuedresize``
 
 ```bash
-cd /path/to/winter
-composer require mercator/wn-queuedresize-plugin
+composer require intervention/image
 php artisan plugin:refresh Mercator.QueuedResize
 php artisan migrate
 ````
