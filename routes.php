@@ -3,59 +3,68 @@
 use Illuminate\Support\Facades\Route;
 use Mercator\QueuedResize\Classes\ImageResizer;
 use Mercator\QueuedResize\Jobs\ProcessImageResize;
+use Illuminate\Support\Facades\Storage;
 
-Route::get("/queuedresize/{hash}", function (string $hash) {
+Route::get('/queuedresize/{hash}', function (string $hash) {
     /** @var ImageResizer $r */
     $r = app(ImageResizer::class);
-    $out = $r->cachedPathFromHash($hash);
 
-    // 1) Already resized?
-    if (is_file($out)) {
-        return response()->file($out, ["Cache-Control" => "public, max-age=31536000"]);
+    $defaultDisk = (string) config('mercator.queuedresize::config.disk', 'local');
+    $extra = (array) config('mercator.queuedresize::config.disks', []);
+    $disks = array_values(array_unique(array_filter(array_merge([$defaultDisk], $extra))));
+
+    $relImg = $r->nestedPath('resized', $hash, 'jpg');
+    $relMeta = $r->nestedPath('resized', $hash, 'json');
+
+    // 1) Already resized on any known disk?
+    foreach ($disks as $d) {
+        if (Storage::disk($d)->exists($relImg)) {
+            $r->setDisk($d);
+            return response()->file(
+                Storage::disk($d)->path($relImg),
+                ['Cache-Control' => 'public, max-age=31536000']
+            );
+        }
     }
 
-    // 2) Load meta data
-    $metaFile = storage_path("app/resized/meta/" . $hash . ".json");
-    $meta = is_file($metaFile) ? json_decode(file_get_contents($metaFile), true) : null;
+    // 2) Find meta on any disk, then try sync render or queue
+    $meta = null;
+    $metaDisk = null;
+    foreach ($disks as $d) {
+        if (Storage::disk($d)->exists($relMeta)) {
+            $meta = json_decode(Storage::disk($d)->get($relMeta), true);
+            $metaDisk = $d;
+            break;
+        }
+    }
 
     if ($meta) {
-        // 3) Fall-back.... no queue
         try {
-            $r->resizeNow($meta["src"] ?? "", $meta["w"] ?? null, $meta["h"] ?? null, $meta["opts"] ?? []);
+            $r->setDisk($metaDisk ?: $defaultDisk);
+            $r->resizeNow($meta['src'] ?? '', $meta['w'] ?? null, $meta['h'] ?? null, $meta['opts'] ?? []);
         } catch (\Throwable $e) {
-            // optional: Loggen
-            \Log::error("queuedresize sync failed", ["hash" => $hash, "err" => $e->getMessage()]);
-            // Fallback: enqueuen, falls später ein Worker läuft
+            \Log::error('queuedresize sync failed', ['hash' => $hash, 'err' => $e->getMessage()]);
             dispatch(
                 (new ProcessImageResize(
-                    $meta["src"] ?? "",
-                    $meta["w"] ?? null,
-                    $meta["h"] ?? null,
-                    $meta["opts"] ?? []
-                ))->onQueue(config("mercator.queuedresize::config.queue", "imaging"))
+                    $meta['src'] ?? '',
+                    $meta['w'] ?? null,
+                    $meta['h'] ?? null,
+                    $meta['opts'] ?? []
+                ))->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
             );
-
-            return response("Accepted", 202, [
-                "Cache-Control" => "no-cache, private",
-                "Retry-After" => "5",
-            ]);
+            return response('Accepted', 202, ['Retry-After' => '5']);
         }
     } else {
-        // No meta data
-        return response("Accepted", 202, [
-            "Cache-Control" => "no-cache, private",
-            "Retry-After" => "5",
-        ]);
+        return response('Accepted', 202, ['Retry-After' => '5']);
     }
 
-    // 4) Deliver teh resized image
-    if (is_file($out)) {
-        return response()->file($out, ["Cache-Control" => "public, max-age=31536000"]);
+    // 3) Serve if created now
+    if ($metaDisk && Storage::disk($metaDisk)->exists($relImg)) {
+        return response()->file(
+            Storage::disk($metaDisk)->path($relImg),
+            ['Cache-Control' => 'public, max-age=31536000']
+        );
     }
 
-    // In case it is not yet there in exeptional cases...
-    return response("Accepted", 202, [
-        "Cache-Control" => "no-cache, private",
-        "Retry-After" => "5",
-    ]);
+    return response('Accepted', 202, ['Retry-After' => '5']);
 });
