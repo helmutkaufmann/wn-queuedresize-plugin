@@ -1,1 +1,3 @@
-2.1.0: Register Twig filter+function via Support\TwigTag
+1.0.0: Initial version
+2.1.0: Register twig filter and function
+2.2.0: Support for disks as defined in config/filesystem.php

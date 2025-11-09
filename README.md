@@ -2,7 +2,7 @@
 
 Queued image resizing plugin for **WinterCMS**.
 
-This plugin performs asynchronous image resizing with on-demand generation, multi-disk support, and meta tracking for reproducibility.
+This plugin performs asynchronous image resizing with on-demand generation, multi-disk support, source-file change detection (via mtime/size), and meta tracking for reproducibility.
 
 ---
 
@@ -18,25 +18,26 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 3. Add environment variables to `.env`:
 
 ```
-   IMAGE_RESIZE_QUEUE=imaging
-   IMAGE_RESIZE_CONCURRENCY=3
-   IMAGE_RESIZE_BACKOFF_SECONDS=5
-   IMAGE_RESIZE_DRIVER=gd
-   IMAGE_RESIZE_DISK=local
-   IMAGE_RESIZE_DISKS=local,s3,backups
+IMAGE\_RESIZE\_QUEUE=imaging
+IMAGE\_RESIZE\_CONCURRENCY=3
+IMAGE\_RESIZE\_BACKOFF\_SECONDS=5
+IMAGE\_RESIZE\_DRIVER=gd
+IMAGE\_RESIZE\_DISK=local
+IMAGE\_RESIZE\_DISKS=local,s3,backups
 ```
 
 4. Run queue worker:
 
 ```
-   php artisan queue:work --queue=imaging
+php artisan queue:work --queue=imaging
 ```
 
 5. Clear caches:
 
 ```
-   php artisan cache:clear
-   php artisan config:clear
+php artisan cache:clear
+php artisan config:clear
+
 ```
 
 ---
@@ -45,12 +46,12 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 
 | Name                             | Default     | Type       | Description                                                                                 |
 | -------------------------------- | ----------- | ---------- | ------------------------------------------------------------------------------------------- |
-| **IMAGE_RESIZE_QUEUE**           | `"imaging"` | string     | Queue name used for resize jobs.                                                            |
-| **IMAGE_RESIZE_CONCURRENCY**     | `3`         | integer    | Maximum concurrent resize jobs.                                                             |
+| **IMAGE_RESIZE_QUEUE** | `"imaging"` | string     | Queue name used for resize jobs.                                                            |
+| **IMAGE_RESIZE_CONCURRENCY** | `3`         | integer    | Maximum concurrent resize jobs.                                                             |
 | **IMAGE_RESIZE_BACKOFF_SECONDS** | `5`         | integer    | Seconds before retry when busy.                                                             |
-| **IMAGE_RESIZE_DRIVER**          | `"gd"`      | string     | Image driver (`gd` or `imagick`).                                                           |
-| **IMAGE_RESIZE_DISK**            | `"local"`   | string     | Default storage disk.                                                                       |
-| **IMAGE_RESIZE_DISKS**           | `""`        | CSV string | Comma-separated list of disks to search when serving images. Example: `"local,s3,backups"`. |
+| **IMAGE_RESIZE_DRIVER** | `"gd"`      | string     | Image driver (`gd` or `imagick`).                                                           |
+| **IMAGE_RESIZE_DISK** | `"local"`   | string     | Default storage disk.                                                                       |
+| **IMAGE_RESIZE_DISKS** | `""`        | CSV string | Comma-separated list of disks to search *for meta files*. Example: `"local,s3,backups"`. |
 
 All parameters live in `plugins/mercator/queuedresize/config/config.php`.
 
@@ -61,39 +62,30 @@ All parameters live in `plugins/mercator/queuedresize/config/config.php`.
 ### In Twig templates
 
 ```
-{# Default disk #}
+{# Default disk, default format (jpg) #}
 {{ qresize('media/uploads/pic.jpg', 1600) }}
 
-{# Specify disk and quality #}
-{{ qresize('media/uploads/pic.jpg', 1600, null, {'disk': 's3', 'quality': 75}) }}
-```
+{# Specify disk, quality, and format (webp) #}
+{{ qresize('media/uploads/pic.jpg', 1600, null, {'disk': 's3', 'quality': 75, 'format': 'webp'}) }}
 
-### In PHP code
-
-```
-use Mercator\QueuedResize\Classes\ImageResizer;
-
-$resizer = app(ImageResizer::class);
-$opts = ['mode' => 'fit', 'disk' => 's3', 'quality' => 80];
-$url = $resizer->cachedUrl(
-    $resizer->hash('media/uploads/pic.jpg', 1600, null, $opts)
-);
+{# Auto-select format based on browser (WebP or JPG) #}
+{{ qresize('media/uploads/pic.jpg', 800, 600, {'mode': 'crop', 'format': 'best'}) }}
 ```
 
 When a new image is requested, it queues a `ProcessImageResize` job.
 Subsequent requests return the cached version instantly.
 
----
+-----
 
 ## 🧠 Available Runtime Options (`opts`)
 
 | Option      | Type   | Default       | Description                                                 |
 | ----------- | ------ | ------------- | ----------------------------------------------------------- |
-| **mode**    | string | `"auto"`      | Resize mode: `auto`, `fit`, or `crop`.                      |
-| **quality** | int    | `60`          | JPEG output quality (1–100).                                |
-| **disk**    | string | *(none)*      | Target filesystem disk.                                     |
-| **driver**  | string | *(inherited)* | Override image driver (`gd`, `imagick`).                    |
-| *(others)*  | mixed  | —             | Custom values stored in meta JSON but ignored by processor. |
+| **mode** | string | `"auto"`      | Resize mode: `auto` (scaleDown), `fit` (scaleDown), or `crop`. |
+| **quality** | int    | `60`          | Output quality (1–100). Used for `jpg` and `webp`.         |
+| **disk** | string | *(config)* | Target filesystem disk. Defaults to `IMAGE_RESIZE_DISK`.      |
+| **format** | string | `"jpg"`       | Output format: `jpg`, `webp`, `png`, `gif`, or `best`.      |
+| *(others)* | mixed  | —             | Custom values stored in meta JSON but ignored by processor. |
 
 ### Resize Modes
 
@@ -103,36 +95,54 @@ Subsequent requests return the cached version instantly.
 | `fit`  | Scales within bounds, preserving aspect ratio. |
 | `crop` | Crops to exact dimensions (centered).          |
 
----
+### Format Option
+
+| Format  | Description                                                         |
+| ------- | ------------------------------------------------------------------- |
+| `jpg`   | (Default) Outputs a JPEG image.                                     |
+| `webp`  | Outputs a WebP image.                                               |
+| `png`   | Outputs a PNG image.                                                |
+| `gif`   | Outputs a GIF image.                                                |
+| `best`  | Serves `webp` if the browser `Accept` header includes it, else `jpg`. |
+
+-----
 
 ## 🧾 Meta JSON
 
-Each resized image produces a matching `.json` file with details:
+Each resized image produces a matching `.json` file with details. The hash is now based on all parameters *plus* the source file's `mtime` and `size` to bust the cache when the original is updated.
 
 ```
 {
   "src": "media/uploads/pic.jpg",
   "w": 1600,
   "h": null,
-  "opts": { "mode": "fit", "quality": 80, "disk": "s3" },
-  "disk": "s3"
+  "opts": {
+    "disk": "s3",
+    "format": "webp",
+    "quality": 75
+  },
+  "disk": "s3",
+  "mtime": 1678886400,
+  "size": 123456
 }
 ```
 
----
+-----
 
 ## 📁 Storage Layout
 
-Two-character subdirectories by hash:
+Two-character subdirectories by hash. The file extension matches the `format` option.
 
 ```
-resized/<aa>/<bb>/<cc>/<hash>.jpg
+resized/<aa>/<bb>/<cc>/<hash>.<ext>
 resized/<aa>/<bb>/<cc>/<hash>.json
 ```
 
-Both stored on the same disk and in the same folder.
+(e.g., `resized/f3/0a/1b/f30a1b...c9.webp` and `resized/f3/0a/1b/f30a1b...c9.json`)
 
----
+Both are stored on the **same disk** (the one specified in `opts` or the default).
+
+-----
 
 ## 🧰 Queue Control
 
@@ -148,51 +158,60 @@ Run the worker:
 php artisan queue:work --queue=imaging
 ```
 
----
+-----
 
 ## 🔍 Multi-Disk Behavior
 
-* Default disk: `IMAGE_RESIZE_DISK`
-* Extra search disks: `IMAGE_RESIZE_DISKS`
-* Per-call override: `{'disk':'s3'}`
-
 When serving `/queuedresize/{hash}`:
 
-* The system checks all disks in order.
-* Uses the first disk that has the image or meta file.
+1.  The system searches all configured disks (from `IMAGE_RESIZE_DISK` and `IMAGE_RESIZE_DISKS`) to find the **meta file** (`<hash>.json`).
+2.  Once the meta file is found, it **reads the `disk` property** from inside that JSON file. This is the *intended* disk.
+3.  It then **only** looks for the resized image (e.g., `<hash>.webp`) on that *one intended disk*.
+4.  If the image is not found on that disk, it queues a job to generate it and save it *to that same disk*.
 
----
+This ensures that an image requested for `s3` is only ever generated, stored, and served from `s3`, even if other disks are configured.
+
+-----
 
 ## 💡 Examples
 
 ### Twig
 
 ```
-{{ qresize('media/uploads/hero.jpg', 1920, 1080, {'mode': 'crop'}) }}
-{{ qresize('media/uploads/logo.png', null, 400, {'disk': 's3', 'quality': 90}) }}
+{# Crop to 800x600 #}
+{{ qresize('media/uploads/hero.jpg', 800, 600, {'mode': 'crop'}) }}
+
+{# Create a 400px high WebP on S3 with 90% quality #}
+{{ qresize('media/uploads/logo.png', null, 400, {'disk': 's3', 'quality': 90, 'format': 'webp'}) }}
+
+{# Let the browser decide between WebP and JPG #}
+{{ qresize('media/uploads/avatar.jpg', 150, 150, {'mode': 'crop', 'format': 'best'}) }}
 ```
 
-### PHP
+### PHP (Dispatching a Job)
 
 ```
 dispatch(new \Mercator\QueuedResize\Jobs\ProcessImageResize(
-    'media/uploads/banner.jpg', 1200, null, ['mode'=>'fit','disk'=>'backups']
+    'media/uploads/banner.jpg', 1200, null, ['mode'=>'fit', 'disk'=>'backups', 'format'=>'jpg']
 ));
 ```
 
----
+-----
 
 ## ✅ Summary
 
-| Feature                            | Supported |
-| ---------------------------------- | --------- |
-| Asynchronous queue processing      | ✅         |
-| On-demand image resizing           | ✅         |
-| Multiple disks (local, s3, etc.)   | ✅         |
-| Two-character subdirectory nesting | ✅         |
-| Meta JSON beside image             | ✅         |
-| GD / Imagick drivers               | ✅         |
+| Feature                                      | Supported |
+| -------------------------------------------- | --------- |
+| Asynchronous queue processing                | ✅         |
+| On-demand image resizing                     | ✅         |
+| Multi-disk (local, s3, etc.) meta-first logic| ✅         |
+| Source file change detection (mtime/size)    | ✅         |
+| Multiple output formats (JPG, WebP, PNG)     | ✅         |
+| "Best" format browser negotiation            | ✅         |
+| Two-character subdirectory nesting           | ✅         |
+| Meta JSON beside image                       | ✅         |
+| GD / Imagick drivers                         | ✅         |
 
----
+-----
 
-© Mercator / Helmut Kaufmann
+© 2015 by mercator.li / Helmut Kaufmann

@@ -13,58 +13,67 @@ Route::get('/queuedresize/{hash}', function (string $hash) {
     $extra = (array) config('mercator.queuedresize::config.disks', []);
     $disks = array_values(array_unique(array_filter(array_merge([$defaultDisk], $extra))));
 
-    $relImg = $r->nestedPath('resized', $hash, 'jpg');
     $relMeta = $r->nestedPath('resized', $hash, 'json');
 
-    // 1) Already resized on any known disk?
-    foreach ($disks as $d) {
-        if (Storage::disk($d)->exists($relImg)) {
-            $r->setDisk($d);
-            return response()->file(
-                Storage::disk($d)->path($relImg),
-                ['Cache-Control' => 'public, max-age=31536000']
-            );
-        }
-    }
-
-    // 2) Find meta on any disk, then try sync render or queue
+    // 1) Find meta on any disk
     $meta = null;
-    $metaDisk = null;
+    $metaDiskFoundOn = null; // The disk where we *found* the meta
     foreach ($disks as $d) {
         if (Storage::disk($d)->exists($relMeta)) {
             $meta = json_decode(Storage::disk($d)->get($relMeta), true);
-            $metaDisk = $d;
+            $metaDiskFoundOn = $d;
             break;
         }
     }
 
-    if ($meta) {
-        try {
-            $r->setDisk($metaDisk ?: $defaultDisk);
-            $r->resizeNow($meta['src'] ?? '', $meta['w'] ?? null, $meta['h'] ?? null, $meta['opts'] ?? []);
-        } catch (\Throwable $e) {
-            \Log::error('queuedresize sync failed', ['hash' => $hash, 'err' => $e->getMessage()]);
-            dispatch(
-                (new ProcessImageResize(
-                    $meta['src'] ?? '',
-                    $meta['w'] ?? null,
-                    $meta['h'] ?? null,
-                    $meta['opts'] ?? []
-                ))->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
-            );
-            return response('Accepted', 202, ['Retry-After' => '5']);
-        }
-    } else {
+    if (!$meta) {
+        \Log::warning('queuedresize: No meta file found for hash.', ['hash' => $hash, 'disks' => $disks]);
+        return response('Not Found', 404);
+    }
+    
+    // 2) We have meta. The *intended* disk is IN the meta.
+    $intendedDisk = $meta['disk'] ?? $defaultDisk;
+    $r->setDisk($intendedDisk);
+    
+    // Determine format from meta
+    $format = strtolower($meta['opts']['format'] ?? 'jpg');
+    $relImg = $r->nestedPath('resized', $hash, $format);
+
+    // 3) Check if image exists on its *intended* disk
+    if (Storage::disk($intendedDisk)->exists($relImg)) {
+        return Storage::disk($intendedDisk)->response(
+            $relImg,
+            null, // name
+            ['Cache-Control' => 'public, max-age=31536000, immutable']
+        );
+    }
+    
+    // 4) Image does not exist. Try to render it sync.
+    try {
+        // resizeNow will use the $intendedDisk set on $r
+        $r->resizeNow($meta['src'] ?? '', $meta['w'] ?? null, $meta['h'] ?? null, $meta['opts'] ?? []);
+    } catch (\Throwable $e) {
+        \Log::error('queuedresize sync failed', ['hash' => $hash, 'err' => $e->getMessage()]);
+        dispatch(
+            (new ProcessImageResize(
+                $meta['src'] ?? '',
+                $meta['w'] ?? null,
+                $meta['h'] ?? null,
+                $meta['opts'] ?? []
+            ))->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
+        );
         return response('Accepted', 202, ['Retry-After' => '5']);
     }
 
-    // 3) Serve if created now
-    if ($metaDisk && Storage::disk($metaDisk)->exists($relImg)) {
-        return response()->file(
-            Storage::disk($metaDisk)->path($relImg),
-            ['Cache-Control' => 'public, max-age=31536000']
+    // 5) Serve if created now
+    if (Storage::disk($intendedDisk)->exists($relImg)) {
+        return Storage::disk($intendedDisk)->response(
+            $relImg,
+            null,
+            ['Cache-Control' => 'public, max-age=31536000, immutable']
         );
     }
-
-    return response('Accepted', 202, ['Retry-After' => '5']);
+    
+    \Log::error('queuedresize: Sync render OK, but file still not found.', ['hash' => $hash, 'disk' => $intendedDisk, 'path' => $relImg]);
+    return response('Processing Error', 500);
 });

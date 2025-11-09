@@ -28,14 +28,49 @@ class ImageResizer
         return $this->disk;
     }
 
-    public function hash(string $src, ?int $w, ?int $h, array $opts): string
+    /**
+     * Get mtime and size stats for the source file.
+     */
+    protected function getSourceStats(string $src): array
+    {
+        $mtime = null;
+        $size = null;
+
+        if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
+            // Cannot get mtime/size from URL reliably
+            return ['mtime' => null, 'size' => null];
+        }
+
+        try {
+            if (Storage::disk($this->disk)->exists($src)) {
+                $mtime = Storage::disk($this->disk)->lastModified($src);
+                $size = Storage::disk($this->disk)->size($src);
+                return ['mtime' => $mtime, 'size' => $size];
+            }
+        } catch (\Exception $e) {
+             // Fails on disks that don't support it, or if file not found
+             \Log::warning('QueuedResize: Could not get stats from disk.', ['src' => $src, 'disk' => $this->disk, 'error' => $e->getMessage()]);
+        }
+
+        // Fallback for absolute local paths
+        if (file_exists($src)) {
+            return ['mtime' => filemtime($src), 'size' => filesize($src)];
+        }
+
+        return ['mtime' => null, 'size' => null];
+    }
+
+    public function hash(string $src, ?int $w, ?int $h, array $opts, ?int $mtime = null, ?int $size = null): string
     {
         // Disk is intentionally NOT part of the hash
         // so the same job across disks shares the same key.
         ksort($opts);
         $opts2 = $opts;
         unset($opts2['disk']);
-        return sha1($src . '|' . (int) $w . '|' . (int) $h . '|' . json_encode($opts2));
+        //
+        // *** FIX: Added missing concatenation operator before (int) $h ***
+        //
+        return sha1($src . '|' . (int) $w . '|' . (int) $h . '|' . (int) $mtime . '|' . (int) $size . '|' . json_encode($opts2));
     }
 
     public function hashDirs(string $hash): array
@@ -53,9 +88,9 @@ class ImageResizer
         return trim($base, '/') . "/{$a}/{$b}/{$c}/{$hash}.{$ext}";
     }
 
-    public function cachedPathFromHash(string $hash): string
+    public function cachedPathFromHash(string $hash, string $ext = 'jpg'): string
     {
-        return Storage::disk($this->disk)->path($this->nestedPath('resized', $hash, 'jpg'));
+        return Storage::disk($this->disk)->path($this->nestedPath('resized', $hash, $ext));
     }
 
     public function cachedUrl(string $hash): string
@@ -63,17 +98,17 @@ class ImageResizer
         return url('/queuedresize/' . $hash);
     }
 
-    public function ensureCacheDir(string $hash): void
+    public function ensureCacheDir(string $hash, string $ext = 'jpg'): void
     {
-        $dir = \dirname(Storage::disk($this->disk)->path($this->nestedPath('resized', $hash, 'jpg')));
+        $dir = \dirname(Storage::disk($this->disk)->path($this->nestedPath('resized', $hash, $ext)));
         if (!is_dir($dir)) {
             @mkdir($dir, 0775, true);
         }
     }
 
-    public function exists(string $hash): bool
+    public function exists(string $hash, string $ext = 'jpg'): bool
     {
-        $rel = $this->nestedPath('resized', $hash, 'jpg');
+        $rel = $this->nestedPath('resized', $hash, $ext);
         return Storage::disk($this->disk)->exists($rel);
     }
 
@@ -86,10 +121,22 @@ class ImageResizer
             $this->setDisk($opts['disk']);
         }
 
-        $hash = $this->hash($src, $W, $H, $opts);
-        $this->ensureCacheDir($hash);
-        $out = $this->cachedPathFromHash($hash);
-        if ($this->exists($hash)) {
+        // Get mtime/size for hash
+        ['mtime' => $mtime, 'size' => $size] = $this->getSourceStats($src);
+
+        // Determine format
+        $format = strtolower($opts['format'] ?? 'jpg');
+        if ($format === 'best') $format = 'jpg'; // Fallback
+        if (!in_array($format, ['jpg', 'webp', 'png', 'gif', 'avif'])) $format = 'jpg';
+        if ($format == 'jpeg') $format = 'jpg';
+        
+        $opts['format'] = $format; // Ensure format is in opts for hashing
+        ksort($opts); // Re-sort after adding format
+
+        $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
+        $this->ensureCacheDir($hash, $format);
+        $out = $this->cachedPathFromHash($hash, $format);
+        if ($this->exists($hash, $format)) {
             return $out;
         }
 
@@ -113,12 +160,36 @@ class ImageResizer
                 break;
         }
 
-        $img->toJpeg($quality)->save($out);
+        // Save with correct format
+        switch ($format) {
+            case 'webp':
+                $img->toWebp($quality)->save($out);
+                break;
+            case 'png':
+                $img->toPng()->save($out);
+                break;
+            case 'gif':
+                $img->toGif()->save($out);
+                break;
+            case 'jpg':
+            default:
+                $img->toJpeg($quality)->save($out);
+                break;
+        }
+
         // write meta JSON next to the image, same disk and folder
         $metaRel = $this->nestedPath('resized', $hash, 'json');
         Storage::disk($this->disk)->put(
             $metaRel,
-            json_encode(['src'=>$src, 'w'=>$W, 'h'=>$H, 'opts'=>$opts, 'disk'=>$this->disk], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)
+            json_encode([
+                'src'=>$src,
+                'w'=>$W,
+                'h'=>$H,
+                'opts'=>$opts,
+                'disk'=>$this->disk,
+                'mtime' => $mtime,
+                'size' => $size
+            ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)
         );
 
         return $out;
@@ -127,21 +198,25 @@ class ImageResizer
     protected function readSource(string $src)
     {
         if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
-            return $src;
+            return $src; // Intervention can read from URL
         }
-        if (str_starts_with($src, 'media/')) {
-            $path = Storage::disk($this->disk)->path($src);
-            if (!file_exists($path)) {
-                throw new \RuntimeException('Source not found: ' . $path);
+
+        // Try to read from the set disk
+        try {
+            if (Storage::disk($this->disk)->exists($src)) {
+                 // Return the raw content, as Intervention can read this
+                return Storage::disk($this->disk)->get($src);
             }
-            return $path;
+        } catch (\Exception $e) {
+             // Could be a non-local disk where path() fails, etc.
+             // Fallback to checking local filesystem
         }
-        if (Storage::disk($this->disk)->exists($src)) {
-            return Storage::disk($this->disk)->path($src);
-        }
+
+        // Fallback for absolute local paths
         if (file_exists($src)) {
             return $src;
         }
-        throw new \RuntimeException('Source not found: ' . $src);
+        
+        throw new \RuntimeException('Source not found on disk "' . $this->disk . '": ' . $src);
     }
 }
