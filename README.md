@@ -61,7 +61,7 @@ All parameters live in `plugins/mercator/queuedresize/config/config.php`.
 
 ### In Twig templates
 
-```twig
+```
 {# Default disk #}
 {{ qresize('media/uploads/pic.jpg', 1600) }}
 
@@ -71,7 +71,7 @@ All parameters live in `plugins/mercator/queuedresize/config/config.php`.
 
 ### In PHP code
 
-```php
+```
 use Mercator\QueuedResize\Classes\ImageResizer;
 
 $resizer = app(ImageResizer::class);
@@ -110,7 +110,7 @@ Subsequent requests return the cached version instantly.
 
 Each resized image produces a matching `.json` file with details:
 
-```json
+```
 {
   "src": "media/uploads/pic.jpg",
   "w": 1600,
@@ -145,7 +145,7 @@ Both stored on the same disk and in the same folder.
 
 Run the worker:
 
-```bash
+```
 php artisan queue:work --queue=imaging
 ```
 
@@ -168,14 +168,14 @@ When serving `/queuedresize/{hash}`:
 
 ### Twig
 
-```twig
+```
 {{ qresize('media/uploads/hero.jpg', 1920, 1080, {'mode': 'crop'}) }}
 {{ qresize('media/uploads/logo.png', null, 400, {'disk': 's3', 'quality': 90}) }}
 ```
 
 ### PHP
 
-```php
+```
 dispatch(new \Mercator\QueuedResize\Jobs\ProcessImageResize(
     'media/uploads/banner.jpg', 1200, null, ['mode'=>'fit','disk'=>'backups']
 ));
