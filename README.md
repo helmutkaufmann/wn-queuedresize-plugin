@@ -1,105 +1,199 @@
 # Mercator QueuedResize
 
-Queued image resizing for WinterCMS.  
-Images are processed asynchronously using Laravel’s queue system.
+Queued image resizing plugin for **WinterCMS**.
+
+This plugin performs asynchronous image resizing with on-demand generation, multi-disk support, and meta tracking for reproducibility.
 
 ---
 
-## Installation
-Clone GitHub repository into ``plugins/mercator/qresize``
+## 🚀 Installation
 
-```bash
-composer require intervention/image
-php artisan plugin:refresh Mercator.QueuedResize
-php artisan migrate
+1. Copy this plugin to  
+   `plugins/mercator/queuedresize/`
+
+2. Configure your filesystem disks in  
+   `config/filesystems.php`  
+   (e.g., `local`, `s3`, `backups`).
+
+3. Add environment variables to `.env`:
+
+   ```env
+   IMAGE_RESIZE_QUEUE=imaging
+   IMAGE_RESIZE_CONCURRENCY=3
+   IMAGE_RESIZE_BACKOFF_SECONDS=5
+   IMAGE_RESIZE_DRIVER=gd
+   IMAGE_RESIZE_DISK=local
+   IMAGE_RESIZE_DISKS=local,s3,backups
 ````
 
-Set the queue driver in `.env`:
+4. Run queue worker:
 
-```
-QUEUE_CONNECTION=database
-```
+   ```bash
+   php artisan queue:work --queue=imaging
+   ```
 
-Run migrations if needed:
+5. Clear caches:
 
-```bash
-php artisan queue:table
-php artisan migrate
-```
-
----
-
-## Run the Queue Worker
-
-Start the background worker:
-
-```bash
-php artisan queue:work database --queue=imaging --sleep=1 --tries=3 --timeout=180
-```
-
-Keep it running via systemd or another process manager if you want it persistent.
+   ```bash
+   php artisan cache:clear
+   php artisan twig:clean
+   php artisan config:clear
+   ```
 
 ---
 
-## Usage in Twig
+## ⚙️ Configuration Parameters
 
-### Resize an image
+| Name                             | Default     | Type       | Description                                                                                 |
+| -------------------------------- | ----------- | ---------- | ------------------------------------------------------------------------------------------- |
+| **IMAGE_RESIZE_QUEUE**           | `"imaging"` | string     | Queue name used for resize jobs.                                                            |
+| **IMAGE_RESIZE_CONCURRENCY**     | `3`         | integer    | Maximum concurrent resize jobs.                                                             |
+| **IMAGE_RESIZE_BACKOFF_SECONDS** | `5`         | integer    | Seconds before retry when busy.                                                             |
+| **IMAGE_RESIZE_DRIVER**          | `"gd"`      | string     | Image driver (`gd` or `imagick`).                                                           |
+| **IMAGE_RESIZE_DISK**            | `"local"`   | string     | Default storage disk.                                                                       |
+| **IMAGE_RESIZE_DISKS**           | `""`        | CSV string | Comma-separated list of disks to search when serving images. Example: `"local,s3,backups"`. |
 
-```twig
-{{ 'media/gallery/photo.jpg' | q_resize(1200, 800) }}
-```
-
-### Crop and fill
-
-```twig
-{{ 'media/gallery/photo.jpg' | q_resize(800, 800, { mode: 'crop' }) }}
-{{ 'media/gallery/photo.jpg' | q_resize(800, 800, { mode: 'fill', bg: '#ffffff' }) }}
-```
-
-### Just set width or height
-
-```twig
-{{ 'media/gallery/photo.jpg' | q_resize(1200) }}       {# width only #}
-{{ 'media/gallery/photo.jpg' | q_resize(null, 800) }}  {# height only #}
-```
-
-### WebP or format override
-
-```twig
-{{ 'media/gallery/photo.jpg' | q_resize(1200, null, { format: 'webp' }) }}
-```
+All parameters live in `plugins/mercator/queuedresize/config/config.php`.
 
 ---
 
-## Usage in PHP
+## 🧩 Usage
+
+### In Twig templates
+
+```twig
+{# Default disk #}
+{{ qresize('media/uploads/pic.jpg', 1600) }}
+
+{# Specify disk and quality #}
+{{ qresize('media/uploads/pic.jpg', 1600, null, {'disk': 's3', 'quality': 75}) }}
+```
+
+### In PHP code
 
 ```php
 use Mercator\QueuedResize\Classes\ImageResizer;
 
 $resizer = app(ImageResizer::class);
-$url = $resizer->resize('media/gallery/photo.jpg', 1200, 800, ['mode' => 'fit']);
-echo $url;
+$opts = ['mode' => 'fit', 'disk' => 's3', 'quality' => 80];
+$url = $resizer->cachedUrl(
+    $resizer->hash('media/uploads/pic.jpg', 1600, null, $opts)
+);
 ```
 
-The method returns a q resize URL like:
-
-```
-https://example.com/qresize/ab12cd34ef56...
-```
-
-On first access the job is q and returns HTTP 202 until finished.
-Once processed, the resized file is served from `storage/app/resized/`.
+When a new image is requested, it queues a `ProcessImageResize` job.
+Subsequent requests return the cached version instantly.
 
 ---
 
-## Notes
+## 🧠 Available Runtime Options (`opts`)
 
-* Jobs use the `imaging` queue by default.
-* Meta files are stored in `storage/app/resized/meta/`.
-* Generated images appear in `storage/app/resized/`.
-* Failed jobs can be listed and retried:
+| Option      | Type   | Default       | Description                                                 |
+| ----------- | ------ | ------------- | ----------------------------------------------------------- |
+| **mode**    | string | `"auto"`      | Resize mode: `auto`, `fit`, or `crop`.                      |
+| **quality** | int    | `60`          | JPEG output quality (1–100).                                |
+| **disk**    | string | *(none)*      | Target filesystem disk.                                     |
+| **driver**  | string | *(inherited)* | Override image driver (`gd`, `imagick`).                    |
+| *(others)*  | mixed  | —             | Custom values stored in meta JSON but ignored by processor. |
 
-  ```bash
-  php artisan queue:failed
-  php artisan queue:retry all
-  ```
+### Resize Modes
+
+| Mode   | Description                                    |
+| ------ | ---------------------------------------------- |
+| `auto` | Scales proportionally to fit width or height.  |
+| `fit`  | Scales within bounds, preserving aspect ratio. |
+| `crop` | Crops to exact dimensions (centered).          |
+
+---
+
+## 🧾 Meta JSON
+
+Each resized image produces a matching `.json` file with details:
+
+```json
+{
+  "src": "media/uploads/pic.jpg",
+  "w": 1600,
+  "h": null,
+  "opts": { "mode": "fit", "quality": 80, "disk": "s3" },
+  "disk": "s3"
+}
+```
+
+---
+
+## 📁 Storage Layout
+
+Two-character subdirectories by hash:
+
+```
+resized/<aa>/<bb>/<cc>/<hash>.jpg
+resized/<aa>/<bb>/<cc>/<hash>.json
+```
+
+Both stored on the same disk and in the same folder.
+
+---
+
+## 🧰 Queue Control
+
+| Env                            | Default     | Purpose                  |
+| ------------------------------ | ----------- | ------------------------ |
+| `IMAGE_RESIZE_QUEUE`           | `"imaging"` | Queue name for jobs.     |
+| `IMAGE_RESIZE_CONCURRENCY`     | `3`         | Max jobs in parallel.    |
+| `IMAGE_RESIZE_BACKOFF_SECONDS` | `5`         | Retry delay on overload. |
+
+Run the worker:
+
+```bash
+php artisan queue:work --queue=imaging
+```
+
+---
+
+## 🔍 Multi-Disk Behavior
+
+* Default disk: `IMAGE_RESIZE_DISK`
+* Extra search disks: `IMAGE_RESIZE_DISKS`
+* Per-call override: `{'disk':'s3'}`
+
+When serving `/queuedresize/{hash}`:
+
+* The system checks all disks in order.
+* Uses the first disk that has the image or meta file.
+
+---
+
+## 💡 Examples
+
+### Twig
+
+```twig
+{{ qresize('media/uploads/hero.jpg', 1920, 1080, {'mode': 'crop'}) }}
+{{ qresize('media/uploads/logo.png', null, 400, {'disk': 's3', 'quality': 90}) }}
+```
+
+### PHP
+
+```php
+dispatch(new \Mercator\QueuedResize\Jobs\ProcessImageResize(
+    'media/uploads/banner.jpg', 1200, null, ['mode'=>'fit','disk'=>'backups']
+));
+```
+
+---
+
+## ✅ Summary
+
+| Feature                            | Supported |
+| ---------------------------------- | --------- |
+| Asynchronous queue processing      | ✅         |
+| On-demand image resizing           | ✅         |
+| Multiple disks (local, s3, etc.)   | ✅         |
+| Two-character subdirectory nesting | ✅         |
+| Meta JSON beside image             | ✅         |
+| GD / Imagick drivers               | ✅         |
+
+---
+
+© Mercator / Helmut Kaufmann
