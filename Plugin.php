@@ -35,7 +35,15 @@ class Plugin extends PluginBase
         $W = $w && $w > 0 ? (int) $w : null;
         $H = $h && $h > 0 ? (int) $h : null;
         ksort($opts);
-
+        
+        // If format is "best", serve WEBP if the browser accepts it, otherwise, serve JPG
+        if (str_contains($_SERVER['HTTP_ACCEPT'], 'image/webp') && !strcmp($opts["format"] ?? "", "best")) {
+            $opts["format"]="webp";
+        }
+        elseif (!strcmp($opts["format"] ?? "", "best")) {
+            $opts["format"]="jpg";
+        }
+        
         $hash = $resizer->hash($src, $W, $H, $opts);
         $disk = isset($opts['disk']) && is_string($opts['disk']) && $opts['disk'] !== ''
             ? (string) $opts['disk']

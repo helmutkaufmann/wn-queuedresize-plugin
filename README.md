@@ -36,7 +36,6 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 
 ```
    php artisan cache:clear
-   php artisan twig:clean
    php artisan config:clear
 ```
 
