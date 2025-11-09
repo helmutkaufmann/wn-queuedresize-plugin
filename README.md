@@ -17,7 +17,7 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 
 3. Add environment variables to `.env`:
 
-   ```
+```
    IMAGE_RESIZE_QUEUE=imaging
    IMAGE_RESIZE_CONCURRENCY=3
    IMAGE_RESIZE_BACKOFF_SECONDS=5
@@ -28,17 +28,17 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 
 4. Run queue worker:
 
-   ```
+```
    php artisan queue:work --queue=imaging
-   ```
+```
 
 5. Clear caches:
 
-   ```
+```
    php artisan cache:clear
    php artisan twig:clean
    php artisan config:clear
-   ```
+```
 
 ---
 
