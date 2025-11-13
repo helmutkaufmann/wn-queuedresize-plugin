@@ -20,7 +20,7 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 ```
 IMAGE_RESIZE_QUEUE=imaging
 IMAGE_RESIZE_CONCURRENCY=3
-IMAGE_RESIZE_BACKOFF\_SECONDS=5
+IMAGE_RESIZE_BACKOFF_SECONDS=5
 IMAGE_RESIZE_DRIVER=gd
 IMAGE_RESIZE_DISK=local
 IMAGE_RESIZE_DISKS=local,s3,backups
