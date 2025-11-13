@@ -18,12 +18,12 @@ This plugin performs asynchronous image resizing with on-demand generation, mult
 3. Add environment variables to `.env`:
 
 ```
-IMAGE\_RESIZE\_QUEUE=imaging
-IMAGE\_RESIZE\_CONCURRENCY=3
-IMAGE\_RESIZE\_BACKOFF\_SECONDS=5
-IMAGE\_RESIZE\_DRIVER=gd
-IMAGE\_RESIZE\_DISK=local
-IMAGE\_RESIZE\_DISKS=local,s3,backups
+IMAGE_RESIZE_QUEUE=imaging
+IMAGE_RESIZE_CONCURRENCY=3
+IMAGE_RESIZE_BACKOFF\_SECONDS=5
+IMAGE_RESIZE_DRIVER=gd
+IMAGE_RESIZE_DISK=local
+IMAGE_RESIZE_DISKS=local,s3,backups
 ```
 
 4. Run queue worker:
