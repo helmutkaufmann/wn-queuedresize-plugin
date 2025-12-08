@@ -4,8 +4,6 @@ use Illuminate\Support\Facades\Storage;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver as GdDriver;
 use Intervention\Image\Drivers\Imagick\Driver as ImDriver;
-use Imagick;
-use Log;
 
 class ImageResizer
 {
@@ -69,15 +67,10 @@ class ImageResizer
         ksort($opts);
         $opts2 = $opts;
         unset($opts2['disk']);
-
-        return sha1(
-            $src . '|' .
-            (int) $w . '|' .
-            (int) $h . '|' .
-            (int) $mtime . '|' .
-            (int) $size . '|' .
-            json_encode($opts2)
-        );
+        //
+        // *** FIX: Added missing concatenation operator before (int) $h ***
+        //
+        return sha1($src . '|' . (int) $w . '|' . (int) $h . '|' . (int) $mtime . '|' . (int) $size . '|' . json_encode($opts2));
     }
 
     public function hashDirs(string $hash): array
@@ -131,23 +124,14 @@ class ImageResizer
         // Get mtime/size for hash
         ['mtime' => $mtime, 'size' => $size] = $this->getSourceStats($src);
 
-        // Detect source extension (for PDF handling)
-        $srcPathForExt = parse_url($src, PHP_URL_PATH) ?? $src;
-        $srcExt = strtolower(pathinfo($srcPathForExt, PATHINFO_EXTENSION));
-
-        // Determine output format
+        // Determine format
         $format = strtolower($opts['format'] ?? 'jpg');
-        if ($format === 'best') $format = 'jpg';
+        if ($format === 'best') $format = 'jpg'; // Fallback
         if (!in_array($format, ['jpg', 'webp', 'png', 'gif', 'avif'])) $format = 'jpg';
-        if ($format === 'jpeg') $format = 'jpg';
-
-        // If source is PDF: force output JPG
-        if ($srcExt === 'pdf') {
-            $format = 'jpg';
-        }
-
+        if ($format == 'jpeg') $format = 'jpg';
+        
         $opts['format'] = $format; // Ensure format is in opts for hashing
-        ksort($opts);              // Re-sort after adding format
+        ksort($opts); // Re-sort after adding format
 
         $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
         $this->ensureCacheDir($hash, $format);
@@ -156,43 +140,7 @@ class ImageResizer
             return $out;
         }
 
-        // Read source (may be path, URL, or binary contents)
         $input = $this->readSource($src);
-
-        // If source is a PDF: render first page to JPEG blob using Imagick
-        if ($srcExt === 'pdf') {
-            
-            if (!class_exists(Imagick::class)) {
-                throw new \RuntimeException('PDF support requires the Imagick PHP extension.');
-            }
-
-            $imagick = new Imagick();
-
-            // Reasonable resolution for thumbnails/previews
-            // $imagick->setResolution(144, 144);
-
-            // $input is PDF content (string) or similar, write to temp file
-            $tmpPdf = tempnam(sys_get_temp_dir(), 'pdfsrc_');
-            if ($tmpPdf === false) {
-                throw new \RuntimeException('Could not create temporary file for PDF rendering.');
-            }
-            file_put_contents($tmpPdf, $input);
-            $imagick->readImage($tmpPdf . '[0]');
-            @unlink($tmpPdf);
-
-            $imagick->setImageColorspace(Imagick::COLORSPACE_RGB);
-            $imagick->setImageFormat('jpeg');
-            $imagick->setImageCompression(Imagick::COMPRESSION_JPEG);
-            $imagick->setImageCompressionQuality(90);
-
-            // Now we have a JPEG blob – feed this into Intervention
-            $input = $imagick->getImageBlob();
-
-            $imagick->clear();
-            $imagick->destroy();
-        }
-
-        // At this point, $input is a "normal" image (binary or path)
         $img = $this->manager->read($input);
 
         $mode = $opts['mode'] ?? 'auto';
@@ -234,14 +182,14 @@ class ImageResizer
         Storage::disk($this->disk)->put(
             $metaRel,
             json_encode([
-                'src'   => $src,
-                'w'     => $W,
-                'h'     => $H,
-                'opts'  => $opts,
-                'disk'  => $this->disk,
+                'src'=>$src,
+                'w'=>$W,
+                'h'=>$H,
+                'opts'=>$opts,
+                'disk'=>$this->disk,
                 'mtime' => $mtime,
-                'size'  => $size,
-            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                'size' => $size
+            ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)
         );
 
         return $out;

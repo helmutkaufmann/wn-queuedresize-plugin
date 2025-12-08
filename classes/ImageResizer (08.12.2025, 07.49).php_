@@ -161,7 +161,6 @@ class ImageResizer
 
         // If source is a PDF: render first page to JPEG blob using Imagick
         if ($srcExt === 'pdf') {
-            
             if (!class_exists(Imagick::class)) {
                 throw new \RuntimeException('PDF support requires the Imagick PHP extension.');
             }
@@ -169,7 +168,7 @@ class ImageResizer
             $imagick = new Imagick();
 
             // Reasonable resolution for thumbnails/previews
-            // $imagick->setResolution(144, 144);
+            $imagick->setResolution(200, 200);
 
             // $input is PDF content (string) or similar, write to temp file
             $tmpPdf = tempnam(sys_get_temp_dir(), 'pdfsrc_');
@@ -190,6 +189,8 @@ class ImageResizer
 
             $imagick->clear();
             $imagick->destroy();
+            
+            Log::info("PDF converted");
         }
 
         // At this point, $input is a "normal" image (binary or path)
