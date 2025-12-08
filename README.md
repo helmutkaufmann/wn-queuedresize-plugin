@@ -2,7 +2,7 @@
 
 Queued image resizing plugin for **WinterCMS**.
 
-This plugin performs asynchronous image resizing with on-demand generation, multi-disk support, source-file change detection (via mtime/size), and meta tracking for reproducibility.
+This plugin performs asynchronous image resizing with on-demand generation, multi-disk support, source-file change detection (via mtime/size), and meta tracking for reproducibility. It now also allows extraction of the first page of a PDF and save as JPG.
 
 ---
 

@@ -1,3 +1,4 @@
 1.0.0: Initial version
 2.1.0: Register twig filter and function
 2.2.0: Support for disks as defined in config/filesystem.php
+2.3.0: Extract first page of a PDF amd save as JPG
