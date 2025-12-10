@@ -1,13 +1,34 @@
 {
-  "name": "mercator/queuedresize",
+  "name": "mercator/wn-queuedresize-plugin",
+  "description": "Queued image and PDF resizing plugin for Winter CMS, providing a drop-in replacement for the resize filter with background processing and modern formats.",
   "type": "winter-plugin",
+  "license": "MIT",
+  "keywords": [
+    "winter",
+    "wintercms",
+    "cms",
+    "image",
+    "resize",
+    "queue",
+    "webp",
+    "pdf",
+    "intervention"
+  ],
+  "homepage": "https://github.com/helmutkaufmann/wn-queuedresize-plugin",
+  "authors": [
+    {
+      "name": "Helmut Kaufmann",
+      "email": "helmut.kaufmann@hslu.ch",
+      "role": "Author"
+    }
+  ],
+  "support": {
+    "issues": "https://github.com/helmutkaufmann/wn-queuedresize-plugin/issues",
+    "source": "https://github.com/helmutkaufmann/wn-queuedresize-plugin"
+  },
   "require": {
     "php": ">=8.0",
-    "intervention/image": ""
-  },
-  "autoload": {
-    "psr-4": {
-      "Mercator\\\\QueuedResize\\\\": ""
-    }
+    "composer/installers": "~1.0",
+    "intervention/image": "^3.0"
   }
 }
