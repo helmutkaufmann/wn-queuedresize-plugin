@@ -1,7 +1,3 @@
-Here is the text formatted as a clean, structured Markdown README file.
-
------
-
 # Queued Resize for WinterCMS
 
 Asynchronous image (and PDF) resizing for WinterCMS, with automatic WebP support and media-library integration.
@@ -34,7 +30,7 @@ This plugin adds a `qresize` Twig **filter and function** that behaves like Wint
 
 ## Requirements
 
-  * WinterCMS (plugin lives under `plugins/mercator/queuedresize`)
+  * WinterCMS (PHP 8.2+)
   * PHP GD or Imagick (via [Intervention Image](http://image.intervention.io/))
   * A working queue setup in WinterCMS (e.g. `php artisan queue:work`)
   * **For PDF thumbnails:**
@@ -104,7 +100,7 @@ return [
     'quality' => (int) env('IMAGE_RESIZE_QUALITY', 60),
 
 ];
-```
+````
 
 ### .env Variables
 
@@ -132,21 +128,14 @@ You can adjust these per environment without changing plugin code. Filesystem an
 
 ## Installation
 
-1.  **Place the plugin files:**
-    Ensure the plugin is located under `plugins/mercator/queuedresize`. Your structure should look like this:
+1.  **Install via Composer:**
+    Run the following command in your WinterCMS project root:
 
-    ```text
-    plugins/
-      mercator/
-        queuedresize/
-          Plugin.php
-          classes/
-            ImageResizer.php
-            Jobs/
-              ProcessImageResize.php
-          config/
-            config.php
+    ```bash
+    composer require mercator/wn-queuedresize-plugin
     ```
+
+    This will install the plugin into `plugins/mercator/queuedresize`.
 
 2.  **Start the Queue Worker:**
     Make sure your queue worker is running.
@@ -157,9 +146,10 @@ You can adjust these per environment without changing plugin code. Filesystem an
 
     *Or configure it with your process manager of choice (systemd, Supervisor, etc.).*
 
-3.  **Clear Caches:**
+3.  **Run Migrations (if applicable) and Clear Caches:**
 
     ```bash
+    php artisan winter:up
     php artisan cache:clear
     php artisan config:clear
     ```
@@ -444,3 +434,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+```
+```
