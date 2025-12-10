@@ -5,7 +5,6 @@ use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver as GdDriver;
 use Intervention\Image\Drivers\Imagick\Driver as ImDriver;
 use Imagick;
-use Log;
 
 class ImageResizer
 {
@@ -14,10 +13,11 @@ class ImageResizer
 
     public function __construct()
     {
-        $drv = strtolower((string) config("mercator.queuedresize::config.driver", "gd"));
-        $driver = $drv === "imagick" ? new ImDriver() : new GdDriver();
+        $drv    = strtolower((string) config('mercator.queuedresize::config.driver', 'gd'));
+        $driver = $drv === 'imagick' ? new ImDriver() : new GdDriver();
+
         $this->manager = new ImageManager($driver);
-        $this->disk = (string) config('mercator.queuedresize::config.disk', 'local');
+        $this->disk    = (string) config('mercator.queuedresize::config.disk', 'local');
     }
 
     public function setDisk(string $disk): void
@@ -32,29 +32,34 @@ class ImageResizer
 
     /**
      * Get mtime and size stats for the source file.
+     * Expects a storage path relative to the disk root, or a local absolute path.
+     * HTTP(S) URLs return null stats (still valid for hashing).
      */
-    protected function getSourceStats(string $src): array
+    public function getSourceStats(string $src): array
     {
         $mtime = null;
-        $size = null;
+        $size  = null;
 
+        // No reliable mtime/size for remote URLs
         if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
-            // Cannot get mtime/size from URL reliably
             return ['mtime' => null, 'size' => null];
         }
 
         try {
             if (Storage::disk($this->disk)->exists($src)) {
                 $mtime = Storage::disk($this->disk)->lastModified($src);
-                $size = Storage::disk($this->disk)->size($src);
+                $size  = Storage::disk($this->disk)->size($src);
+
                 return ['mtime' => $mtime, 'size' => $size];
             }
         } catch (\Exception $e) {
-             // Fails on disks that don't support it, or if file not found
-             \Log::warning('QueuedResize: Could not get stats from disk.', ['src' => $src, 'disk' => $this->disk, 'error' => $e->getMessage()]);
+            \Log::warning('QueuedResize: Could not get stats from disk.', [
+                'src'   => $src,
+                'disk'  => $this->disk,
+                'error' => $e->getMessage(),
+            ]);
         }
 
-        // Fallback for absolute local paths
         if (file_exists($src)) {
             return ['mtime' => filemtime($src), 'size' => filesize($src)];
         }
@@ -62,13 +67,15 @@ class ImageResizer
         return ['mtime' => null, 'size' => null];
     }
 
+    /**
+     * Stable hash for one resize job.
+     * Disk is intentionally NOT part of the hash.
+     */
     public function hash(string $src, ?int $w, ?int $h, array $opts, ?int $mtime = null, ?int $size = null): string
     {
-        // Disk is intentionally NOT part of the hash
-        // so the same job across disks shares the same key.
         ksort($opts);
         $opts2 = $opts;
-        unset($opts2['disk']);
+        unset($opts2['disk']); // disk should not affect hash
 
         return sha1(
             $src . '|' .
@@ -86,18 +93,22 @@ class ImageResizer
         $a = substr($h, 0, 2) ?: '00';
         $b = substr($h, 2, 2) ?: '00';
         $c = substr($h, 4, 2) ?: '00';
+
         return [$a, $b, $c];
     }
 
     public function nestedPath(string $base, string $hash, string $ext): string
     {
         [$a, $b, $c] = $this->hashDirs($hash);
+
         return trim($base, '/') . "/{$a}/{$b}/{$c}/{$hash}.{$ext}";
     }
 
     public function cachedPathFromHash(string $hash, string $ext = 'jpg'): string
     {
-        return Storage::disk($this->disk)->path($this->nestedPath('resized', $hash, $ext));
+        return Storage::disk($this->disk)->path(
+            $this->nestedPath('resized', $hash, $ext)
+        );
     }
 
     public function cachedUrl(string $hash): string
@@ -107,7 +118,12 @@ class ImageResizer
 
     public function ensureCacheDir(string $hash, string $ext = 'jpg'): void
     {
-        $dir = \dirname(Storage::disk($this->disk)->path($this->nestedPath('resized', $hash, $ext)));
+        $dir = \dirname(
+            Storage::disk($this->disk)->path(
+                $this->nestedPath('resized', $hash, $ext)
+            )
+        );
+
         if (!is_dir($dir)) {
             @mkdir($dir, 0775, true);
         }
@@ -116,42 +132,68 @@ class ImageResizer
     public function exists(string $hash, string $ext = 'jpg'): bool
     {
         $rel = $this->nestedPath('resized', $hash, $ext);
+
         return Storage::disk($this->disk)->exists($rel);
     }
 
+    protected function client_supports_webp(): bool
+    {
+        if (!isset($_SERVER['HTTP_ACCEPT'])) {
+            return false;
+        }
+
+        return stripos($_SERVER['HTTP_ACCEPT'], 'image/webp') !== false;
+    }
+
+    /**
+     * Main resize entry point used by the queued job.
+     * $src can be:
+     * - storage path (e.g. "media/foo.jpg")
+     * - absolute filesystem path
+     * - http(s) URL
+     */
     public function resizeNow(string $src, ?int $w, ?int $h, array $opts): string
     {
         $W = $w && $w > 0 ? $w : null;
         $H = $h && $h > 0 ? $h : null;
         ksort($opts);
+
+        // Disk override in options
         if (isset($opts['disk']) && is_string($opts['disk']) && $opts['disk'] !== '') {
             $this->setDisk($opts['disk']);
         }
 
-        // Get mtime/size for hash
+        // File stats for hashing
         ['mtime' => $mtime, 'size' => $size] = $this->getSourceStats($src);
 
         // Detect source extension (for PDF handling)
         $srcPathForExt = parse_url($src, PHP_URL_PATH) ?? $src;
-        $srcExt = strtolower(pathinfo($srcPathForExt, PATHINFO_EXTENSION));
+        $srcExt        = strtolower(pathinfo($srcPathForExt, PATHINFO_EXTENSION));
 
         // Determine output format
-        $format = strtolower($opts['format'] ?? 'jpg');
-        if ($format === 'best') $format = 'jpg';
-        if (!in_array($format, ['jpg', 'webp', 'png', 'gif', 'avif'])) $format = 'jpg';
-        if ($format === 'jpeg') $format = 'jpg';
-
-        // If source is PDF: force output JPG
-        if ($srcExt === 'pdf') {
-            $format = 'jpg';
+        $format = strtolower($opts['format'] ?? 'best');
+        switch ($format) {
+            case 'best':
+                $format = $this->client_supports_webp() ? 'webp' : 'jpg';
+                break;
+            case 'avif':
+            case 'jpeg':
+                $format = 'jpg';
+                break;
+            default:
+                // jpg/png/gif/webp etc are passed through
+                break;
         }
 
-        $opts['format'] = $format; // Ensure format is in opts for hashing
-        ksort($opts);              // Re-sort after adding format
+        $opts['format'] = $format;
+        ksort($opts);
 
+        // Hash must use the same $src string as the filter
         $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
+
         $this->ensureCacheDir($hash, $format);
         $out = $this->cachedPathFromHash($hash, $format);
+
         if ($this->exists($hash, $format)) {
             return $out;
         }
@@ -161,21 +203,17 @@ class ImageResizer
 
         // If source is a PDF: render first page to JPEG blob using Imagick
         if ($srcExt === 'pdf') {
-            
             if (!class_exists(Imagick::class)) {
                 throw new \RuntimeException('PDF support requires the Imagick PHP extension.');
             }
 
             $imagick = new Imagick();
 
-            // Reasonable resolution for thumbnails/previews
-            // $imagick->setResolution(144, 144);
-
-            // $input is PDF content (string) or similar, write to temp file
             $tmpPdf = tempnam(sys_get_temp_dir(), 'pdfsrc_');
             if ($tmpPdf === false) {
                 throw new \RuntimeException('Could not create temporary file for PDF rendering.');
             }
+
             file_put_contents($tmpPdf, $input);
             $imagick->readImage($tmpPdf . '[0]');
             @unlink($tmpPdf);
@@ -195,7 +233,7 @@ class ImageResizer
         // At this point, $input is a "normal" image (binary or path)
         $img = $this->manager->read($input);
 
-        $mode = $opts['mode'] ?? 'auto';
+        $mode    = $opts['mode'] ?? 'auto';
         $quality = (int) ($opts['quality'] ?? 60);
 
         switch ($mode) {
@@ -229,8 +267,9 @@ class ImageResizer
                 break;
         }
 
-        // write meta JSON next to the image, same disk and folder
+        // Write meta JSON next to the image, same disk and folder
         $metaRel = $this->nestedPath('resized', $hash, 'json');
+
         Storage::disk($this->disk)->put(
             $metaRel,
             json_encode([
@@ -247,28 +286,34 @@ class ImageResizer
         return $out;
     }
 
+    /**
+     * Read source image.
+     * - HTTP(S) → return URL (Intervention can read it directly)
+     * - Otherwise try Storage disk, then local filesystem.
+     */
     protected function readSource(string $src)
     {
         if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
             return $src; // Intervention can read from URL
         }
 
-        // Try to read from the set disk
+        // Try to read from the configured disk
         try {
             if (Storage::disk($this->disk)->exists($src)) {
-                 // Return the raw content, as Intervention can read this
+                // Return the raw content, as Intervention can read this
                 return Storage::disk($this->disk)->get($src);
             }
         } catch (\Exception $e) {
-             // Could be a non-local disk where path() fails, etc.
-             // Fallback to checking local filesystem
+            // Fallback to checking local filesystem
         }
 
         // Fallback for absolute local paths
         if (file_exists($src)) {
             return $src;
         }
-        
-        throw new \RuntimeException('Source not found on disk "' . $this->disk . '": ' . $src);
+
+        throw new \RuntimeException(
+            'Source not found on disk "' . $this->disk . '": ' . $src
+        );
     }
 }

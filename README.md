@@ -1,217 +1,446 @@
-# Mercator QueuedResize
+Here is the text formatted as a clean, structured Markdown README file.
 
-Queued image resizing plugin for **WinterCMS**.
+-----
 
-This plugin performs asynchronous image resizing with on-demand generation, multi-disk support, source-file change detection (via mtime/size), and meta tracking for reproducibility. It now also allows extraction of the first page of a PDF and save as JPG.
+# Queued Resize for WinterCMS
 
----
+Asynchronous image (and PDF) resizing for WinterCMS, with automatic WebP support and media-library integration.
 
-## 🚀 Installation
+This plugin adds a `qresize` Twig **filter and function** that behaves like Winter’s built-in `resize`, but:
 
-1. Copy this plugin to  
-   `plugins/mercator/queuedresize/`
+  * Resizing is done via the queue (no heavy work in the HTTP request).
+  * Results are cached on disk and reused.
+  * It can generate thumbnails from PDF files (first page).
+  * It can output WebP when the browser supports it.
+  * It works with different filesystem disks.
 
-2. Configure your filesystem disks in  
-   `config/filesystems.php`  
-   (e.g., `local`, `s3`, `backups`).
+-----
 
-3. Add environment variables to `.env`:
+## Features
 
+  * `qresize` Twig **filter** and **function**
+  * Drop-in replacement for `resize` in templates
+  * Works with:
+      * Media paths (`media/foo/bar.jpg`)
+      * URLs from `| media` (e.g. `/storage/app/media/...`)
+      * External URLs (`https://example.com/image.jpg`)
+  * PDF → image thumbnail (first page)
+  * WebP output when the client sends `Accept: image/webp`
+  * Multi-disk support via `disk` option
+  * Caching on disk (resized files + JSON metadata)
+  * Avoids repeated image processing under load
+
+-----
+
+## Requirements
+
+  * WinterCMS (plugin lives under `plugins/mercator/queuedresize`)
+  * PHP GD or Imagick (via [Intervention Image](http://image.intervention.io/))
+  * A working queue setup in WinterCMS (e.g. `php artisan queue:work`)
+  * **For PDF thumbnails:**
+      * PHP Imagick extension
+      * Ghostscript / ImageMagick properly installed on the server
+
+> **Note:** If PDF support is missing, PDF inputs will fail with a runtime error until Imagick is available.
+
+-----
+
+## Configuration
+
+### Plugin Config File
+
+The plugin reads its settings via `config('mercator.queuedresize::config.*')`. These are defined in the plugin config file:
+
+`plugins/mercator/queuedresize/config/config.php`
+
+(or in an app-level override, if you create `config/mercator/queuedresize/config.php`).
+
+**Example `config.php`:**
+
+```php
+<?php
+
+return [
+
+    /*
+    |--------------------------------------------------------------------------
+    | Queue name
+    |--------------------------------------------------------------------------
+    |
+    | The queue on which resize jobs will be dispatched.
+    |
+    */
+    'queue' => env('IMAGE_RESIZE_QUEUE', 'imaging'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Image driver
+    |--------------------------------------------------------------------------
+    |
+    | The Intervention Image driver to use: "gd" or "imagick".
+    |
+    */
+    'driver' => env('IMAGE_RESIZE_DRIVER', 'gd'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Default storage disk
+    |--------------------------------------------------------------------------
+    |
+    | The filesystem disk used to read originals and write resized images,
+    | unless a different disk is explicitly passed via the "disk" option.
+    |
+    */
+    'disk' => env('IMAGE_RESIZE_DISK', 'local'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Default quality
+    |--------------------------------------------------------------------------
+    |
+    | Fallback JPEG / WebP quality when none is provided in the options.
+    |
+    */
+    'quality' => (int) env('IMAGE_RESIZE_QUALITY', 60),
+
+];
 ```
+
+### .env Variables
+
+The plugin does not read `.env` directly; it uses `config()`. The mapping to `.env` happens in the config file shown above.
+
+**Supported environment variables:**
+
+```dotenv
+# Queue name used for resize jobs
 IMAGE_RESIZE_QUEUE=imaging
-IMAGE_RESIZE_CONCURRENCY=3
-IMAGE_RESIZE_BACKOFF_SECONDS=5
+
+# Image driver: gd or imagick
 IMAGE_RESIZE_DRIVER=gd
-IMAGE_RESIZE_DISK=local
-IMAGE_RESIZE_DISKS=local,s3,backups
+
+# Default filesystem disk for originals + resized images
+IMAGE_RESIZE_DISK=media
+
+# Default image quality (0–100)
+IMAGE_RESIZE_QUALITY=60
 ```
 
-4. Run queue worker:
+You can adjust these per environment without changing plugin code. Filesystem and queue base configuration still follow standard Winter/Laravel patterns and may also use `.env`.
 
+-----
+
+## Installation
+
+1.  **Place the plugin files:**
+    Ensure the plugin is located under `plugins/mercator/queuedresize`. Your structure should look like this:
+
+    ```text
+    plugins/
+      mercator/
+        queuedresize/
+          Plugin.php
+          classes/
+            ImageResizer.php
+            Jobs/
+              ProcessImageResize.php
+          config/
+            config.php
+    ```
+
+2.  **Start the Queue Worker:**
+    Make sure your queue worker is running.
+
+    ```bash
+    php artisan queue:work
+    ```
+
+    *Or configure it with your process manager of choice (systemd, Supervisor, etc.).*
+
+3.  **Clear Caches:**
+
+    ```bash
+    php artisan cache:clear
+    php artisan config:clear
+    ```
+
+-----
+
+## Usage in Twig
+
+The plugin registers `qresize` both as a filter and as a function. Both hit the same underlying method.
+
+### As a Filter (Drop-in style)
+
+```twig
+{# qresize as a filter: src | qresize(width, height, options) #}
+
+<img src="{{ 'media/example.jpg' | qresize(800, 600) }}" alt="">
+
+{# With options #}
+<img src="{{ 'media/example.jpg' | qresize(800, 600, { mode: 'crop', quality: 80 }) }}" alt="">
 ```
+
+This is usually a drop-in replacement for the built-in resize:
+
+```twig
+{# Before #}
+<img src="{{ 'media/example.jpg' | resize(800, 600) }}" alt="">
+
+{# After (queued) #}
+<img src="{{ 'media/example.jpg' | qresize(800, 600) }}" alt="">
+```
+
+It also works with `| media`:
+
+```twig
+<img src="{{ record.image | media | qresize(800, 600) }}" alt="">
+```
+
+### As a Function
+
+Same arguments, function syntax:
+
+```twig
+{# qresize(src, width, height, options) #}
+
+<img src="{{ qresize('media/example.jpg', 800, 600) }}" alt="">
+
+{# With options #}
+<img src="{{ qresize('media/example.jpg', 800, 600, { mode: 'crop', quality: 80 }) }}" alt="">
+```
+
+Useful when working with variables:
+
+```twig
+{% set src   = record.image | media %}
+{% set width = 800 %}
+{% set opts  = { mode: 'crop', quality: 75 } %}
+
+<img src="{{ qresize(src, width, null, opts) }}" alt="">
+```
+
+-----
+
+## Arguments and Options
+
+### Source (`src`)
+
+`src` can be:
+
+  * A media path: `media/example.jpg`
+  * A URL created by `| media`, e.g. `/storage/app/media/example.jpg`
+  * A full external URL: `https://example.com/image.jpg`
+
+The plugin internally normalises these into something it can feed to Intervention Image or Imagick.
+
+### Width and Height
+
+  * `null` or `0` means “no constraint” on that dimension (aspect ratio is preserved).
+
+<!-- end list -->
+
+```twig
+{{ 'media/example.jpg' | qresize(800, 600) }}   {# target box #}
+{{ 'media/example.jpg' | qresize(800, null) }}  {# fixed width, auto height #}
+{{ 'media/example.jpg' | qresize(null, 400) }}  {# fixed height, auto width #}
+```
+
+### Options Array
+
+The 4th parameter is the options array:
+
+```twig
+{{ 'media/example.jpg' | qresize(800, 600, {
+    mode: 'crop',        // 'auto' (default) or 'crop'
+    quality: 70,         // JPEG/WebP quality 0–100
+    format: 'best',      // 'best', 'jpg', 'png', 'gif', 'webp', 'jpeg', 'avif'
+    disk: 'media'        // override default disk
+}) }}
+```
+
+  * **`mode`**
+      * `auto` (default): scale down to fit within width/height.
+      * `crop`: crop to exact width/height (centered) when both are given.
+  * **`quality`**
+      * Output quality for JPEG and WebP. Defaults to `IMAGE_RESIZE_QUALITY` or the plugin config.
+  * **`format`**
+      * `best` (default): serve WebP if the client supports it, otherwise JPEG.
+      * `jpg`, `png`, `gif`, `webp`, `jpeg`, `avif`: explicit formats.
+  * **`disk`**
+      * Override the default disk from config for this particular call.
+
+-----
+
+## PDF Thumbnails
+
+If Imagick is available, the plugin can treat PDF files like images by rendering the first page to a JPEG internally.
+
+**Example:**
+
+```twig
+{# Thumbnail from first page of a PDF #}
+<img src="{{ 'media/docs/report.pdf' | qresize(null, 200) }}" alt="Report">
+```
+
+**Example for a directory browser:**
+
+```twig
+{% if file.isPdf %}
+    <img src="{{ file.path | qresize(null, 150) }}" alt="{{ file.displayName }}">
+{% endif %}
+```
+
+**Requirements for PDF support:**
+
+1.  PHP Imagick extension.
+2.  Ghostscript / ImageMagick configured and accessible.
+
+**Internally:**
+
+1.  The first page of the PDF is rendered via Imagick.
+2.  The resulting JPEG is sent through the normal resize pipeline.
+
+-----
+
+## Multi-disk Usage
+
+If your originals live on a non-default disk (e.g. S3), pass `disk` in the options:
+
+```twig
+{# Image on S3 (disk: 's3') #}
+<img src="{{ 'uploads/gallery/image1.jpg' | qresize(1200, 800, { disk: 's3' }) }}" alt="">
+```
+
+If you have a public URL from that disk:
+
+```twig
+{% set urlForS3 = someModel.s3_image_url %}
+<img src="{{ qresize(urlForS3, 800, 600, { disk: 's3' }) }}" alt="">
+```
+
+The plugin uses the disk’s base URL to map the URL back to a storage path before reading. If this fails, fix the disk’s `url` configuration in `config/filesystems.php`.
+
+-----
+
+## WebP “Best Format” Mode
+
+If `format` is omitted or set to `'best'`:
+
+  * If the client’s `Accept` header includes `image/webp`, the plugin outputs WebP.
+  * Otherwise, it falls back to JPEG.
+
+**Example:**
+
+```twig
+<img src="{{ 'media/example.jpg' | qresize(800, 600, { format: 'best' }) }}" alt="">
+```
+
+This gives WebP to capable browsers without extra work in your templates.
+
+-----
+
+## Caching and Storage Layout
+
+Resized images are stored on the configured disk under a nested directory structure, based on a hash:
+
+```text
+resized/ab/cd/ef/abcdef1234567890...webp
+resized/ab/cd/ef/abcdef1234567890...json
+```
+
+The hash is derived from:
+
+  * Source (path or URL)
+  * Requested width / height
+  * Options (excluding the disk key in the hash)
+  * mtime and size snapshot (where available)
+
+The `.json` file contains metadata:
+
+  * src (original source)
+  * w, h (dimensions)
+  * opts (options)
+  * disk
+  * mtime, size
+
+If an identical resize is requested again, the existing file is reused and no new job is queued. To clear cached resized images, delete the `resized` directory on the relevant disk.
+
+-----
+
+## Queue Behaviour and Concurrency
+
+When you call `qresize` with a new combination of source + options:
+
+1.  The plugin writes the JSON metadata next to where the image will live.
+2.  It dispatches a `ProcessImageResize` job on the configured queue.
+3.  It immediately returns the URL for the resized image.
+
+Rendering happens asynchronously in the queue worker.
+
+**Important notes:**
+
+  * A single `php artisan queue:work` process handles jobs one at a time.
+  * Concurrency comes from running multiple workers:
+
+<!-- end list -->
+
+```bash
+php artisan queue:work --queue=imaging
+php artisan queue:work --queue=imaging
 php artisan queue:work --queue=imaging
 ```
 
-5. Clear caches:
+This gives you up to 3 jobs in parallel on the `imaging` queue.
 
-```
-php artisan cache:clear
-php artisan config:clear
-
-```
-
----
-
-## ⚙️ Configuration Parameters
-
-| Name                             | Default     | Type       | Description                                                                                 |
-| -------------------------------- | ----------- | ---------- | ------------------------------------------------------------------------------------------- |
-| **IMAGE_RESIZE_QUEUE** | `"imaging"` | string     | Queue name used for resize jobs.                                                            |
-| **IMAGE_RESIZE_CONCURRENCY** | `3`         | integer    | Maximum concurrent resize jobs.                                                             |
-| **IMAGE_RESIZE_BACKOFF_SECONDS** | `5`         | integer    | Seconds before retry when busy.                                                             |
-| **IMAGE_RESIZE_DRIVER** | `"gd"`      | string     | Image driver (`gd` or `imagick`).                                                           |
-| **IMAGE_RESIZE_DISK** | `"local"`   | string     | Default storage disk.                                                                       |
-| **IMAGE_RESIZE_DISKS** | `""`        | CSV string | Comma-separated list of disks to search *for meta files*. Example: `"local,s3,backups"`. |
-
-All parameters live in `plugins/mercator/queuedresize/config/config.php`.
-
----
-
-## 🧩 Usage
-
-### In Twig templates
-
-```
-{# Default disk, default format (jpg) #}
-{{ qresize('media/uploads/pic.jpg', 1600) }}
-
-{# Specify disk, quality, and format (webp) #}
-{{ qresize('media/uploads/pic.jpg', 1600, null, {'disk': 's3', 'quality': 75, 'format': 'webp'}) }}
-
-{# Auto-select format based on browser (WebP or JPG) #}
-{{ qresize('media/uploads/pic.jpg', 800, 600, {'mode': 'crop', 'format': 'best'}) }}
-```
-
-When a new image is requested, it queues a `ProcessImageResize` job.
-Subsequent requests return the cached version instantly.
+If you want faster throughput for heavy image jobs, increase the number of workers or use a process manager that can scale workers.
 
 -----
 
-## 🧠 Available Runtime Options (`opts`)
+## Troubleshooting
 
-| Option      | Type   | Default       | Description                                                 |
-| ----------- | ------ | ------------- | ----------------------------------------------------------- |
-| **mode** | string | `"auto"`      | Resize mode: `auto` (scaleDown), `fit` (scaleDown), or `crop`. |
-| **quality** | int    | `60`          | Output quality (1–100). Used for `jpg` and `webp`.         |
-| **disk** | string | *(config)* | Target filesystem disk. Defaults to `IMAGE_RESIZE_DISK`.      |
-| **format** | string | `"jpg"`       | Output format: `jpg`, `webp`, `png`, `gif`, or `best`.      |
-| *(others)* | mixed  | —             | Custom values stored in meta JSON but ignored by processor. |
+  * **“Source not found on disk …”**
 
-### Resize Modes
+      * Check what you actually pass into `qresize`:
+          * `media/foo.jpg`
+          * `file.path` from your media lists
+          * or `someField | media | qresize(...)`
+      * Confirm that the path exists on the configured disk (`IMAGE_RESIZE_DISK` or `disk` option).
 
-| Mode   | Description                                    |
-| ------ | ---------------------------------------------- |
-| `auto` | Scales proportionally to fit width or height.  |
-| `fit`  | Scales within bounds, preserving aspect ratio. |
-| `crop` | Crops to exact dimensions (centered).          |
+  * **PDFs not rendering**
 
-### Format Option
+      * Confirm Imagick is installed and enabled in PHP.
+      * Confirm ImageMagick + Ghostscript are installed and working.
+      * Check PHP and queue logs for Imagick-related exceptions.
 
-| Format  | Description                                                         |
-| ------- | ------------------------------------------------------------------- |
-| `jpg`   | (Default) Outputs a JPEG image.                                     |
-| `webp`  | Outputs a WebP image.                                               |
-| `png`   | Outputs a PNG image.                                                |
-| `gif`   | Outputs a GIF image.                                                |
-| `best`  | Serves `webp` if the browser `Accept` header includes it, else `jpg`. |
+  * **Nothing is being resized**
+
+      * Verify at least one queue worker is running.
+      * Ensure the worker listens on the correct queue name (`IMAGE_RESIZE_QUEUE` / `config('mercator.queuedresize::config.queue')`).
+      * Inspect `storage/logs/` or run `php artisan queue:work --verbose` for errors.
 
 -----
 
-## 🧾 Meta JSON
+## License
 
-Each resized image produces a matching `.json` file with details. The hash is now based on all parameters *plus* the source file's `mtime` and `size` to bust the cache when the original is updated.
+**The MIT License (MIT)**
 
-```
-{
-  "src": "media/uploads/pic.jpg",
-  "w": 1600,
-  "h": null,
-  "opts": {
-    "disk": "s3",
-    "format": "webp",
-    "quality": 75
-  },
-  "disk": "s3",
-  "mtime": 1678886400,
-  "size": 123456
-}
-```
+Copyright (C) 2025 Helmut Kaufmann, [https://mercator.li](https://mercator.li), software@mercator.li
 
------
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-## 📁 Storage Layout
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-Two-character subdirectories by hash. The file extension matches the `format` option.
-
-```
-resized/<aa>/<bb>/<cc>/<hash>.<ext>
-resized/<aa>/<bb>/<cc>/<hash>.json
-```
-
-(e.g., `resized/f3/0a/1b/f30a1b...c9.webp` and `resized/f3/0a/1b/f30a1b...c9.json`)
-
-Both are stored on the **same disk** (the one specified in `opts` or the default).
-
------
-
-## 🧰 Queue Control
-
-| Env                            | Default     | Purpose                  |
-| ------------------------------ | ----------- | ------------------------ |
-| `IMAGE_RESIZE_QUEUE`           | `"imaging"` | Queue name for jobs.     |
-| `IMAGE_RESIZE_CONCURRENCY`     | `3`         | Max jobs in parallel.    |
-| `IMAGE_RESIZE_BACKOFF_SECONDS` | `5`         | Retry delay on overload. |
-
-Run the worker:
-
-```
-php artisan queue:work --queue=imaging
-```
-
------
-
-## 🔍 Multi-Disk Behavior
-
-When serving `/queuedresize/{hash}`:
-
-1.  The system searches all configured disks (from `IMAGE_RESIZE_DISK` and `IMAGE_RESIZE_DISKS`) to find the **meta file** (`<hash>.json`).
-2.  Once the meta file is found, it **reads the `disk` property** from inside that JSON file. This is the *intended* disk.
-3.  It then **only** looks for the resized image (e.g., `<hash>.webp`) on that *one intended disk*.
-4.  If the image is not found on that disk, it queues a job to generate it and save it *to that same disk*.
-
-This ensures that an image requested for `s3` is only ever generated, stored, and served from `s3`, even if other disks are configured.
-
------
-
-## 💡 Examples
-
-### Twig
-
-```
-{# Crop to 800x600 #}
-{{ qresize('media/uploads/hero.jpg', 800, 600, {'mode': 'crop'}) }}
-
-{# Create a 400px high WebP on S3 with 90% quality #}
-{{ qresize('media/uploads/logo.png', null, 400, {'disk': 's3', 'quality': 90, 'format': 'webp'}) }}
-
-{# Let the browser decide between WebP and JPG #}
-{{ qresize('media/uploads/avatar.jpg', 150, 150, {'mode': 'crop', 'format': 'best'}) }}
-```
-
-### PHP (Dispatching a Job)
-
-```
-dispatch(new \Mercator\QueuedResize\Jobs\ProcessImageResize(
-    'media/uploads/banner.jpg', 1200, null, ['mode'=>'fit', 'disk'=>'backups', 'format'=>'jpg']
-));
-```
-
------
-
-## ✅ Summary
-
-| Feature                                      | Supported |
-| -------------------------------------------- | --------- |
-| Asynchronous queue processing                | ✅         |
-| On-demand image resizing                     | ✅         |
-| Multi-disk (local, s3, etc.) meta-first logic| ✅         |
-| Source file change detection (mtime/size)    | ✅         |
-| Multiple output formats (JPG, WebP, PNG)     | ✅         |
-| "Best" format browser negotiation            | ✅         |
-| Two-character subdirectory nesting           | ✅         |
-| Meta JSON beside image                       | ✅         |
-| GD / Imagick drivers                         | ✅         |
-
------
-
-© 2015 by mercator.li / Helmut Kaufmann
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
