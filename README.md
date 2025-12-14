@@ -10,7 +10,7 @@ This plugin adds a `qresize` Twig **filter and function** that behaves like Wint
 * It can output WebP when the browser supports it.
 * It works with different filesystem disks.
 
------
+---
 
 ## Features
 
@@ -26,7 +26,7 @@ This plugin adds a `qresize` Twig **filter and function** that behaves like Wint
 * Caching on disk (resized files + JSON metadata)
 * Avoids repeated image processing under load
 
------
+---
 
 ## Requirements
 
@@ -39,7 +39,7 @@ This plugin adds a `qresize` Twig **filter and function** that behaves like Wint
 
 > **Note:** If PDF support is missing, PDF inputs will fail with a runtime error until Imagick is available.
 
------
+---
 
 ## Configuration
 
@@ -52,7 +52,6 @@ The plugin reads settings via `config('mercator.queuedresize::config.*')`. These
 (or in an app-level override at `config/mercator/queuedresize/config.php`).
 
 **Example `config.php`:**
-
 ```php
 <?php
 
@@ -121,13 +120,13 @@ return [
     'quality' => (int) env('IMAGE_RESIZE_QUALITY', 60),
 
 ];
+```
 
-.env Variables
+###.env VariablesThe plugin does not read `.env` directly; it uses `config()`. The mapping to `.env` happens in the config file shown above.
 
-The plugin does not read .env directly; it uses config(). The mapping to .env happens in the config file shown above.
+**Supported environment variables:**
 
-Supported environment variables:
-
+```dotenv
 # Queue name used for resize jobs
 IMAGE_RESIZE_QUEUE=imaging
 
@@ -143,237 +142,250 @@ IMAGE_RESIZE_DISKS=portfolio,s3
 
 # Default image quality (0–100)
 IMAGE_RESIZE_QUALITY=60
+```
 
+---
 
-⸻
-
-Installation
-	1.	Install via Composer:
-
+##Installation###Install via Composer
+```bash
 composer require mercator/wn-queuedresize-plugin
+```
 
-
-	2.	Start the Queue Worker:
-
+###Start the Queue Worker
+```bash
 php artisan queue:work
+```
 
 Or run workers via systemd / Supervisor / your process manager.
 
-	3.	Run Updates and Clear Caches:
-
+###Run Updates and Clear Caches
+```bash
 php artisan winter:up
 php artisan cache:clear
 php artisan config:clear
+```
 
+---
 
+##Usage in TwigThe plugin registers `qresize` as a filter and as a function.
 
-⸻
-
-Usage in Twig
-
-The plugin registers qresize as a filter and as a function.
-
-As a Filter (Drop-in style)
-
+###As a Filter (Drop-in style)
+```twig
 {# qresize as a filter: src | qresize(width, height, options) #}
 
 <img src="{{ 'media/example.jpg' | qresize(800, 600) }}" alt="">
 
 {# With options #}
 <img src="{{ 'media/example.jpg' | qresize(800, 600, { mode: 'crop', quality: 80 }) }}" alt="">
+```
 
-Drop-in replacement for built-in resize:
-
+**Drop-in replacement for built-in `resize`:**
+```twig
 {# Before #}
 <img src="{{ 'media/example.jpg' | resize(800, 600) }}" alt="">
 
 {# After (queued) #}
 <img src="{{ 'media/example.jpg' | qresize(800, 600) }}" alt="">
+```
 
-Works with | media:
-
+**Works with `| media`:**
+```twig
 <img src="{{ record.image | media | qresize(800, 600) }}" alt="">
+```
 
-As a Function
-
+###As a Function
+```twig
 {# qresize(src, width, height, options) #}
 
 <img src="{{ qresize('media/example.jpg', 800, 600) }}" alt="">
 
 {# With options #}
 <img src="{{ qresize('media/example.jpg', 800, 600, { mode: 'crop', quality: 80 }) }}" alt="">
+```
 
-Useful with variables:
+**Useful with variables:**
 
+```twig
 {% set src   = record.image | media %}
 {% set width = 800 %}
 {% set opts  = { mode: 'crop', quality: 75 } %}
 
 <img src="{{ qresize(src, width, null, opts) }}" alt="">
+```
 
+---
 
-⸻
+##Arguments and Options###Source (`src`)`src` can be:
 
-Arguments and Options
+* A media path: `media/example.jpg`
+* A URL created by `| media`, e.g. `/storage/app/media/example.jpg`
+* A full external URL: `https://example.com/image.jpg`
 
-Source (src)
+###Width and Height* `null` or `0` means “no constraint” on that dimension (aspect ratio preserved).
 
-src can be:
-	•	A media path: media/example.jpg
-	•	A URL created by | media, e.g. /storage/app/media/example.jpg
-	•	A full external URL: https://example.com/image.jpg
-
-Width and Height
-	•	null or 0 means “no constraint” on that dimension (aspect ratio preserved).
-
+```twig
 {{ 'media/example.jpg' | qresize(800, 600) }}   {# target box #}
 {{ 'media/example.jpg' | qresize(800, null) }}  {# fixed width, auto height #}
 {{ 'media/example.jpg' | qresize(null, 400) }}  {# fixed height, auto width #}
+```
 
-Options Array
+###Options ArrayThe 4th parameter is the options array:
 
-The 4th parameter is the options array:
-
+```twig
 {{ 'media/example.jpg' | qresize(800, 600, {
     mode: 'crop',        // 'auto' (default) or 'crop'
     quality: 70,         // JPEG/WebP quality 0–100
     format: 'best',      // 'best', 'jpg', 'png', 'gif', 'webp', 'jpeg', 'avif'
     disk: 'media'        // override default disk
 }) }}
+```
 
-	•	mode
-	•	auto (default): scale down to fit within width/height.
-	•	crop: crop to exact width/height (centered) when both are given.
-	•	quality
-	•	Output quality for JPEG and WebP. Defaults to IMAGE_RESIZE_QUALITY.
-	•	format
-	•	best (default): serve WebP if the client supports it, otherwise JPEG.
-	•	jpg, png, gif, webp, jpeg, avif: explicit formats.
-	•	disk
-	•	Override the default disk from config for this call.
+* **`mode`**
+* `auto` (default): scale down to fit within width/height.
+* `crop`: crop to exact width/height (centered) when both are given.
 
-Note (multi-disk): If you use { disk: 'portfolio' } while your default disk is local, make sure IMAGE_RESIZE_DISKS includes portfolio, so /queuedresize/{hash} can resolve the cached files.
 
-⸻
+* **`quality`**
+* Output quality for JPEG and WebP. Defaults to `IMAGE_RESIZE_QUALITY`.
 
-PDF Thumbnails
 
-If Imagick is available, the plugin can treat PDF files like images by rendering the first page.
+* **`format`**
+* `best` (default): serve WebP if the client supports it, otherwise JPEG.
+* `jpg`, `png`, `gif`, `webp`, `jpeg`, `avif`: explicit formats.
 
+
+* **`disk`**
+* Override the default disk from config for this call.
+
+
+
+> **Note (multi-disk):** If you use `{ disk: 'portfolio' }` while your default disk is local, make sure `IMAGE_RESIZE_DISKS` includes `portfolio`, so `/queuedresize/{hash}` can resolve the cached files.
+
+---
+
+##PDF ThumbnailsIf Imagick is available, the plugin can treat PDF files like images by rendering the first page.
+
+```twig
 <img src="{{ 'media/docs/report.pdf' | qresize(null, 200) }}" alt="Report">
 
-Requirements:
-	1.	PHP Imagick extension.
-	2.	Ghostscript / ImageMagick installed and working.
+```
 
-⸻
+**Requirements:**
 
-Multi-disk Usage
+1. PHP Imagick extension.
+2. Ghostscript / ImageMagick installed and working.
 
-If your originals live on a non-default disk, pass disk:
+---
 
+##Multi-disk UsageIf your originals live on a non-default disk, pass `disk`:
+
+```twig
 <img src="{{ 'uploads/gallery/image1.jpg' | qresize(1200, 800, { disk: 's3' }) }}" alt="">
+
+```
 
 If you have a public URL from that disk:
 
+```twig
 {% set urlForS3 = someModel.s3_image_url %}
 <img src="{{ qresize(urlForS3, 800, 600, { disk: 's3' }) }}" alt="">
 
-The plugin uses the disk’s configured url to map URLs back to storage paths. If mapping fails, fix the disk’s url in config/filesystems.php.
+```
 
-⸻
+The plugin uses the disk’s configured `url` to map URLs back to storage paths. If mapping fails, fix the disk’s `url` in `config/filesystems.php`.
 
-WebP “Best Format” Mode
+---
 
-If format is omitted or set to 'best':
-	•	If the client’s Accept header includes image/webp, output is WebP.
-	•	Otherwise, it falls back to JPEG.
+##WebP “Best Format” ModeIf `format` is omitted or set to `'best'`:
 
+* If the client’s `Accept` header includes `image/webp`, output is WebP.
+* Otherwise, it falls back to JPEG.
+
+```twig
 <img src="{{ 'media/example.jpg' | qresize(800, 600, { format: 'best' }) }}" alt="">
 
+```
 
-⸻
+---
 
-Caching and Storage Layout
+##Caching and Storage LayoutResized images are stored on the configured disk under a nested directory structure, based on a hash:
 
-Resized images are stored on the configured disk under a nested directory structure, based on a hash:
-
+```text
 resized/ab/cd/ef/abcdef1234567890...webp
 resized/ab/cd/ef/abcdef1234567890...json
 
+```
+
 The hash is derived from:
-	•	Source (path or URL)
-	•	Requested width / height
-	•	Options (including disk, if enabled in your hash implementation)
-	•	mtime and size snapshot (where available)
 
-The .json file contains metadata such as:
-	•	src (original source)
-	•	w, h (dimensions)
-	•	opts (options)
-	•	disk
-	•	mtime, size
+* Source (path or URL)
+* Requested width / height
+* Options (including disk, if enabled in your hash implementation)
+* mtime and size snapshot (where available)
 
-If an identical resize is requested again, the existing file is reused and no new job is queued. To clear cached resized images, delete the resized directory on the relevant disk.
+The `.json` file contains metadata such as:
 
-⸻
+* `src` (original source)
+* `w`, `h` (dimensions)
+* `opts` (options)
+* `disk`
+* `mtime`, `size`
 
-Queue Behaviour and Concurrency
+If an identical resize is requested again, the existing file is reused and no new job is queued. To clear cached resized images, delete the `resized` directory on the relevant disk.
 
-When you call qresize with a new combination of source + options:
-	1.	The plugin writes the JSON metadata next to where the image will live.
-	2.	It dispatches a ProcessImageResize job on the configured queue.
-	3.	It immediately returns the URL for the resized image.
+---
+
+##Queue Behaviour and ConcurrencyWhen you call `qresize` with a new combination of source + options:
+
+1. The plugin writes the JSON metadata next to where the image will live.
+2. It dispatches a `ProcessImageResize` job on the configured queue.
+3. It immediately returns the URL for the resized image.
 
 Rendering happens asynchronously in the queue worker.
 
-Notes:
-	•	A single php artisan queue:work process handles jobs one at a time.
-	•	Concurrency comes from running multiple workers:
+**Notes:**
 
+* A single `php artisan queue:work` process handles jobs one at a time.
+* Concurrency comes from running multiple workers:
+
+```bash
 php artisan queue:work --queue=imaging
 php artisan queue:work --queue=imaging
 php artisan queue:work --queue=imaging
+```
+
+---
+
+##Troubleshooting* **“Source not found on disk …”**
+* Verify what you pass into `qresize` (`media/foo.jpg`, `file.path`, `someField | media`, etc.).
+* Confirm the file exists on the disk used (`IMAGE_RESIZE_DISK` or `disk` option).
 
 
-⸻
+* **PDFs not rendering**
+* Confirm Imagick is installed and enabled in PHP.
+* Confirm ImageMagick + Ghostscript are installed and working.
+* Check queue and PHP logs for Imagick exceptions.
 
-Troubleshooting
-•	“Source not found on disk …”
-    •	Verify what you pass into qresize (media/foo.jpg, file.path, someField | media, etc.).
-    •	Confirm the file exists on the disk used (IMAGE_RESIZE_DISK or disk option).
-•	PDFs not rendering
-    •	Confirm Imagick is installed and enabled in PHP.
-    •	Confirm ImageMagick + Ghostscript are installed and working.
-    •	Check queue and PHP logs for Imagick exceptions.
-•	Nothing is being resized
-    •	Verify at least one queue worker is running.
-    •	Ensure the worker listens on the correct queue (IMAGE_RESIZE_QUEUE).
-    •	Run php artisan queue:work --verbose and inspect storage/logs/.
 
-⸻
+* **Nothing is being resized**
+* Verify at least one queue worker is running.
+* Ensure the worker listens on the correct queue (`IMAGE_RESIZE_QUEUE`).
+* Run `php artisan queue:work --verbose` and inspect `storage/logs/`.
 
-License
 
-The MIT License (MIT)
+
+---
+
+##LicenseThe MIT License (MIT)
 
 Copyright (C) 2025 Helmut Kaufmann, https://mercator.li, software@mercator.li
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the “Software”), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+```
+
+```
