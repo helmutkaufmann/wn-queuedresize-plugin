@@ -122,7 +122,8 @@ return [
 ];
 ```
 
-### .env VariablesThe plugin does not read `.env` directly; it uses `config()`. The mapping to `.env` happens in the config file shown above.
+### .env Variables
+The plugin does not read `.env` directly; it uses `config()`. The mapping to `.env` happens in the config file shown above.
 
 **Supported environment variables:**
 
@@ -146,7 +147,8 @@ IMAGE_RESIZE_QUALITY=60
 
 ---
 
-## Installation###Install via Composer
+## Installation
+### Install via Composer
 ```bash
 composer require mercator/wn-queuedresize-plugin
 ```
@@ -167,7 +169,8 @@ php artisan config:clear
 
 ---
 
-## Usage in TwigThe plugin registers `qresize` as a filter and as a function.
+## Usage in Twig
+The plugin registers `qresize` as a filter and as a function.
 
 ### As a Filter (Drop-in style)
 ```twig
@@ -215,13 +218,15 @@ php artisan config:clear
 
 ---
 
-## Arguments and Options###Source (`src`)`src` can be:
+## Arguments and Options
+### Source (`src`)`src` can be:
 
 * A media path: `media/example.jpg`
 * A URL created by `| media`, e.g. `/storage/app/media/example.jpg`
 * A full external URL: `https://example.com/image.jpg`
 
-### Width and Height* `null` or `0` means “no constraint” on that dimension (aspect ratio preserved).
+### Width and Height
+* `null` or `0` means “no constraint” on that dimension (aspect ratio preserved).
 
 ```twig
 {{ 'media/example.jpg' | qresize(800, 600) }}   {# target box #}
@@ -240,30 +245,29 @@ php artisan config:clear
 }) }}
 ```
 
-* **`mode`**
+**`mode`**
 * `auto` (default): scale down to fit within width/height.
 * `crop`: crop to exact width/height (centered) when both are given.
 
 
-* **`quality`**
+**`quality`**
 * Output quality for JPEG and WebP. Defaults to `IMAGE_RESIZE_QUALITY`.
 
 
-* **`format`**
+**`format`**
 * `best` (default): serve WebP if the client supports it, otherwise JPEG.
 * `jpg`, `png`, `gif`, `webp`, `jpeg`, `avif`: explicit formats.
 
 
-* **`disk`**
+**`disk`**
 * Override the default disk from config for this call.
-
-
 
 > **Note (multi-disk):** If you use `{ disk: 'portfolio' }` while your default disk is local, make sure `IMAGE_RESIZE_DISKS` includes `portfolio`, so `/queuedresize/{hash}` can resolve the cached files.
 
 ---
 
-## PDF ThumbnailsIf Imagick is available, the plugin can treat PDF files like images by rendering the first page.
+## PDF Thumbnails
+If Imagick is available, the plugin can treat PDF files like images by rendering the first page.
 
 ```twig
 <img src="{{ 'media/docs/report.pdf' | qresize(null, 200) }}" alt="Report">
@@ -277,7 +281,8 @@ php artisan config:clear
 
 ---
 
-## Multi-disk UsageIf your originals live on a non-default disk, pass `disk`:
+## Multi-disk Usage
+If your originals live on a non-default disk, pass `disk`:
 
 ```twig
 <img src="{{ 'uploads/gallery/image1.jpg' | qresize(1200, 800, { disk: 's3' }) }}" alt="">
@@ -296,7 +301,8 @@ The plugin uses the disk’s configured `url` to map URLs back to storage paths.
 
 ---
 
-## WebP “Best Format” ModeIf `format` is omitted or set to `'best'`:
+## WebP “Best Format” Mode
+If `format` is omitted or set to `'best'`:
 
 * If the client’s `Accept` header includes `image/webp`, output is WebP.
 * Otherwise, it falls back to JPEG.
@@ -308,7 +314,8 @@ The plugin uses the disk’s configured `url` to map URLs back to storage paths.
 
 ---
 
-## Caching and Storage LayoutResized images are stored on the configured disk under a nested directory structure, based on a hash:
+## Caching and Storage Layout
+Resized images are stored on the configured disk under a nested directory structure, based on a hash:
 
 ```text
 resized/ab/cd/ef/abcdef1234567890...webp
@@ -335,7 +342,8 @@ If an identical resize is requested again, the existing file is reused and no ne
 
 ---
 
-## Queue Behaviour and ConcurrencyWhen you call `qresize` with a new combination of source + options:
+## Queue Behaviour and Concurrency
+When you call `qresize` with a new combination of source + options:
 
 1. The plugin writes the JSON metadata next to where the image will live.
 2. It dispatches a `ProcessImageResize` job on the configured queue.
@@ -356,7 +364,8 @@ php artisan queue:work --queue=imaging
 
 ---
 
-## Troubleshooting* **“Source not found on disk …”**
+## Troubleshooting
+**“Source not found on disk …”**
 * Verify what you pass into `qresize` (`media/foo.jpg`, `file.path`, `someField | media`, etc.).
 * Confirm the file exists on the disk used (`IMAGE_RESIZE_DISK` or `disk` option).
 
