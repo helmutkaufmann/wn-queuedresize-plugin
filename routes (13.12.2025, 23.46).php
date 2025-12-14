@@ -4,7 +4,6 @@ use Illuminate\Support\Facades\Route;
 use Mercator\QueuedResize\Classes\ImageResizer;
 use Mercator\QueuedResize\Jobs\ProcessImageResize;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Log;
 
 Route::get('/queuedresize/{hash}', function (string $hash) {
     /** @var ImageResizer $r */
@@ -18,27 +17,22 @@ Route::get('/queuedresize/{hash}', function (string $hash) {
 
     // 1) Find meta on any disk
     $meta = null;
-    $diskFoundOn = null;
-
+    $metaDiskFoundOn = null; // The disk where we *found* the meta
     foreach ($disks as $d) {
         if (Storage::disk($d)->exists($relMeta)) {
             $meta = json_decode(Storage::disk($d)->get($relMeta), true);
-            $diskFoundOn = $d;
-            break; 
+            $metaDiskFoundOn = $d;
+            break;
         }
     }
 
-    if (!$meta || !$diskFoundOn) {
-        Log::warning("queuedresize: No meta file found for hash $hash on disks " . implode(', ', $disks));
+    if (!$meta) {
+        \Log::warning("queuedresize: No meta file found for hash $hash on disk $disks.");
         return response('Not Found', 404);
     }
     
-    // 2) Determine Intended Disk
-    // FIX: If 'disk' is missing in JSON, use the disk we actually found the file on ($diskFoundOn).
-    // Previously, this defaulted to $defaultDisk ('local'), which caused the write error.
-    $intendedDisk = $meta['disk'] ?? $diskFoundOn;
-    
-    // Set the disk on the Resizer so resizeNow() writes to the correct place
+    // 2) We have meta. The *intended* disk is IN the meta.
+    $intendedDisk = $meta['disk'] ?? $defaultDisk;
     $r->setDisk($intendedDisk);
     
     // Determine format from meta
@@ -56,18 +50,17 @@ Route::get('/queuedresize/{hash}', function (string $hash) {
     
     // 4) Image does not exist. Try to render it sync.
     try {
-        // resizeNow will use $intendedDisk because we called $r->setDisk() above
+        // resizeNow will use the $intendedDisk set on $r
         $r->resizeNow($meta['src'] ?? '', $meta['w'] ?? null, $meta['h'] ?? null, $meta['opts'] ?? []);
     } catch (\Throwable $e) {
-        Log::error('queuedresize sync failed', ['hash' => $hash, 'err' => $e->getMessage()]);
+        \Log::error('queuedresize sync failed', ['hash' => $hash, 'err' => $e->getMessage()]);
         dispatch(
             (new ProcessImageResize(
                 $meta['src'] ?? '',
                 $meta['w'] ?? null,
                 $meta['h'] ?? null,
                 $meta['opts'] ?? []
-            ))
-            ->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
+            ))->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
         );
         return response('Accepted', 202, ['Retry-After' => '5']);
     }
@@ -81,10 +74,6 @@ Route::get('/queuedresize/{hash}', function (string $hash) {
         );
     }
     
-    Log::error('queuedresize: Sync render OK, but file still not found.', [
-        'hash' => $hash, 
-        'disk' => $intendedDisk, 
-        'path' => $relImg
-    ]);
+    \Log::error('queuedresize: Sync render OK, but file still not found.', ['hash' => $hash, 'disk' => $intendedDisk, 'path' => $relImg]);
     return response('Processing Error', 500);
 });

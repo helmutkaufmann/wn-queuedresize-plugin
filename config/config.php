@@ -29,12 +29,30 @@ return [
     | Default storage disk
     |--------------------------------------------------------------------------
     |
-    | The filesystem disk used to read originals and write resized images,
-    | unless a different disk is explicitly passed via the "disk" option.
+    | Default filesystem disk used by the plugin when no per-call "disk"
+    | option is provided. It is used for:
+    | - reading originals
+    | - writing resized images
+    | - writing resize metadata (JSON)
+    | - default lookup by /queuedresize/{hash}
     |
     */
-
     'disk' => env('IMAGE_RESIZE_DISK', 'local'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Additional lookup disks
+    |--------------------------------------------------------------------------
+    |
+    | Extra disks that /queuedresize/{hash} will also search (in addition to
+    | the default disk) when resolving metadata/images. Needed when you use
+    | per-call disk overrides.
+    |
+    */
+    'disks' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('IMAGE_RESIZE_DISKS', ''))
+    ))),
 
     /*
     |--------------------------------------------------------------------------

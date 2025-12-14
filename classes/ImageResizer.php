@@ -1,6 +1,7 @@
 <?php namespace Mercator\QueuedResize\Classes;
 
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\File as HttpFile; // Added for robust file handling
 use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver as GdDriver;
 use Intervention\Image\Drivers\Imagick\Driver as ImDriver;
@@ -69,13 +70,19 @@ class ImageResizer
 
     /**
      * Stable hash for one resize job.
-     * Disk is intentionally NOT part of the hash.
+     *
+     * Disk IS part of the hash to prevent collisions between otherwise
+     * identical resize requests targeting different filesystem disks.
      */
     public function hash(string $src, ?int $w, ?int $h, array $opts, ?int $mtime = null, ?int $size = null): string
     {
+        // Ensure a deterministic disk value is included in the hash.
+        // If caller did not provide one, use the resizer's current disk.
+        if (!array_key_exists('disk', $opts) || $opts['disk'] === null || $opts['disk'] === '') {
+            $opts['disk'] = $this->disk;
+        }
+
         ksort($opts);
-        $opts2 = $opts;
-        unset($opts2['disk']); // disk should not affect hash
 
         return sha1(
             $src . '|' .
@@ -83,7 +90,7 @@ class ImageResizer
             (int) $h . '|' .
             (int) $mtime . '|' .
             (int) $size . '|' .
-            json_encode($opts2)
+            json_encode($opts)
         );
     }
 
@@ -118,14 +125,19 @@ class ImageResizer
 
     public function ensureCacheDir(string $hash, string $ext = 'jpg'): void
     {
-        $dir = \dirname(
-            Storage::disk($this->disk)->path(
+        // On remote disks (S3), paths are keys and directories don't physically exist,
+        // so we wrap this in a try/catch or simple check to avoid crashes.
+        try {
+            $path = Storage::disk($this->disk)->path(
                 $this->nestedPath('resized', $hash, $ext)
-            )
-        );
+            );
+            $dir = \dirname($path);
 
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0775, true);
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0775, true);
+            }
+        } catch (\Exception $e) {
+            // Ignore directory creation errors on remote disks
         }
     }
 
@@ -147,10 +159,6 @@ class ImageResizer
 
     /**
      * Main resize entry point used by the queued job.
-     * $src can be:
-     * - storage path (e.g. "media/foo.jpg")
-     * - absolute filesystem path
-     * - http(s) URL
      */
     public function resizeNow(string $src, ?int $w, ?int $h, array $opts): string
     {
@@ -190,13 +198,17 @@ class ImageResizer
 
         // Hash must use the same $src string as the filter
         $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
+        
+        // Calculate the relative path for Storage (the "Key")
+        $relPath = $this->nestedPath('resized', $hash, $format);
 
-        $this->ensureCacheDir($hash, $format);
-        $out = $this->cachedPathFromHash($hash, $format);
-
-        if ($this->exists($hash, $format)) {
-            return $out;
+        // Check if exists
+        if (Storage::disk($this->disk)->exists($relPath)) {
+             return $this->cachedPathFromHash($hash, $format);
         }
+        
+        // Create directory if local (fails gracefully on S3)
+        $this->ensureCacheDir($hash, $format);
 
         // Read source (may be path, URL, or binary contents)
         $input = $this->readSource($src);
@@ -250,24 +262,45 @@ class ImageResizer
                 break;
         }
 
-        // Save with correct format
-        switch ($format) {
-            case 'webp':
-                $img->toWebp($quality)->save($out);
-                break;
-            case 'png':
-                $img->toPng()->save($out);
-                break;
-            case 'gif':
-                $img->toGif()->save($out);
-                break;
-            case 'jpg':
-            default:
-                $img->toJpeg($quality)->save($out);
-                break;
+        // ---------------------------------------------------------
+        // FIX: Save to Local Temp File First, Then Upload
+        // ---------------------------------------------------------
+        
+        $tempFile = tempnam(sys_get_temp_dir(), 'resize_out_');
+        
+        try {
+            // Save image to the local temp file
+            switch ($format) {
+                case 'webp':
+                    $img->toWebp($quality)->save($tempFile);
+                    break;
+                case 'png':
+                    $img->toPng()->save($tempFile);
+                    break;
+                case 'gif':
+                    $img->toGif()->save($tempFile);
+                    break;
+                case 'jpg':
+                default:
+                    $img->toJpeg($quality)->save($tempFile);
+                    break;
+            }
+
+            // Upload the temp file to the target disk (Atomic/Streamed)
+            Storage::disk($this->disk)->putFileAs(
+                dirname($relPath), 
+                new HttpFile($tempFile), 
+                basename($relPath)
+            );
+
+        } finally {
+            // Ensure temp file is always deleted
+            if (file_exists($tempFile)) {
+                @unlink($tempFile);
+            }
         }
 
-        // Write meta JSON next to the image, same disk and folder
+        // Write meta JSON next to the image
         $metaRel = $this->nestedPath('resized', $hash, 'json');
 
         Storage::disk($this->disk)->put(
@@ -283,7 +316,7 @@ class ImageResizer
             ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
         );
 
-        return $out;
+        return $this->cachedPathFromHash($hash, $format);
     }
 
     /**
