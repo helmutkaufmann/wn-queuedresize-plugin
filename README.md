@@ -1,4 +1,5 @@
-#Queued Resize Plugin for WinterCMS (Mercator.QueuedResize)This plugin provides an asynchronous and memory-efficient solution for handling image resizing in WinterCMS. By offloading resource-intensive image processing to the Laravel Queue, it prevents synchronous page loads from becoming slow and avoids server exhaustion, making it ideal for large media libraries and high-traffic environments.
+# Queued Resize Plugin for WinterCMS (Mercator.QueuedResize)
+This plugin provides an asynchronous and memory-efficient solution for handling image resizing in WinterCMS. By offloading resource-intensive image processing to the Laravel Queue, it prevents synchronous page loads from becoming slow and avoids server exhaustion, making it ideal for large media libraries and high-traffic environments.
 
 ###F eatures
 | Summary | Category | Feature | Benefit |
