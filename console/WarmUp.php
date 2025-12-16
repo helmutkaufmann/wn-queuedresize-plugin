@@ -86,8 +86,6 @@ class WarmUp extends Command
             ['mode', null, InputOption::VALUE_OPTIONAL, 'Resize mode (auto, crop, fit)', 'auto'],
             ['quality', null, InputOption::VALUE_OPTIONAL, 'Quality (0-100)', 80],
             ['format', null, InputOption::VALUE_OPTIONAL, 'Formats (e.g. "jpg,webp")', 'best'],
-            
-            // Flags
             ['recursive', 'r', InputOption::VALUE_NONE, 'Scan subdirectories'],
             ['force', 'f', InputOption::VALUE_NONE, 'Force regeneration (ignore existing cache)'],
         ];

@@ -10,12 +10,11 @@ return [
     | The queue on which resize jobs will be dispatched.
     |
     */
-
     'queue' => env('IMAGE_RESIZE_QUEUE', 'imaging'),
 
     /*
     |--------------------------------------------------------------------------
-    | Concurrency Limit (NEW)
+    | Concurrency Limit
     |--------------------------------------------------------------------------
     |
     | The maximum number of simultaneous image resize jobs that can run across 
@@ -27,7 +26,7 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Backoff Time (NEW)
+    | Backoff Time
     |--------------------------------------------------------------------------
     |
     | The number of seconds a job should wait before being released back to the 
@@ -44,8 +43,7 @@ return [
     | The Intervention Image driver to use: "gd" or "imagick".
     |
     */
-
-    'driver' => env('IMAGE_RESIZE_DRIVER', 'gd'),
+    'driver' => env('IMAGE_RESIZE_DRIVER', 'imagick'),
 
     /*
     |--------------------------------------------------------------------------
@@ -86,7 +84,6 @@ return [
     | This is optional; if you don't wire it into the code, you can remove it.
     |
     */
-
     'quality' => (int) env('IMAGE_RESIZE_QUALITY', 80),
 
 ];
