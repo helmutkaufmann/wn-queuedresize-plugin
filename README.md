@@ -1,7 +1,7 @@
 # Queued Resize Plugin for WinterCMS (Mercator.QueuedResize)
 This plugin provides an asynchronous and memory-efficient solution for handling image resizing in WinterCMS. By offloading resource-intensive image processing to the Laravel Queue, it prevents synchronous page loads from becoming slow and avoids server exhaustion, making it ideal for large media libraries and high-traffic environments.
 
-###F eatures
+### Features
 | Summary | Category | Feature | Benefit |
 | --- | --- | --- | --- |
 | **Performance** | Asynchronous Processing | User does not wait for image creation; page loads remain fast. |  |
@@ -25,7 +25,8 @@ The plugin uses a dedicated configuration file (`config.php`) which pulls its va
 | `IMAGE_RESIZE_CONCURRENCY` | `3` | **(Critical)** The maximum number of simultaneous resize jobs that can run at once. | `ProcessImageResize.php` |
 | `IMAGE_RESIZE_BACKOFF` | `5` | The number of seconds a job should wait before being re-released to the queue if the concurrency limit is reached. | `ProcessImageResize.php` |
 
-###Starting Queue WorkersThe plugin is useless without a running queue worker. You should use a process manager (like Supervisor) to ensure this command runs continuously:
+### Starting Queue Workers
+The plugin is useless without a running queue worker. You should use a process manager (like Supervisor) to ensure this command runs continuously:
 
 ```bash
 # Start a worker process dedicated to the 'imaging' queue
@@ -74,7 +75,8 @@ queuedresize_path($path, $w, $h, $opts = [], $recursive = false, $disk = null);
 
 ```
 
-### Function Parameters| Parameter | Type | Required | Description |
+### Function Parameters
+| Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | **`$path`** | `string` | Yes | The path to a **directory** or a **file** within the target directory. If a file is provided, the function automatically processes the file's parent directory. |
 | **`$w`** | `int/null` | No | The desired output width in pixels. |
@@ -107,7 +109,8 @@ function onStart()
 ## 4. Command Line Interface (CLI) - All Parameters
 The CLI commands are used for mass generation and maintenance.
 
-### A. `queuedresize:warmup` (Batch Processing)Recursively generates resized images for a directory.
+### A. `queuedresize:warmup` (Batch Processing)
+Recursively generates resized images for a directory.
 | Parameter | Alias | Required | Description | Example Value |
 | :--- | :--- | :--- | :--- | :--- |
 | **`path`** | (argument) | Yes | The relative folder path to scan for original images (e.g., inside `storage/app/media`). | `"media/gallery"` |
