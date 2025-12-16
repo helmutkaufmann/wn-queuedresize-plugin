@@ -27,11 +27,6 @@ class Plugin extends PluginBase
         $this->registerConsoleCommand('queuedresize.warmup', \Mercator\QueuedResize\Console\WarmUp::class);
         $this->registerConsoleCommand('queuedresize.prune', \Mercator\QueuedResize\Console\Prune::class);
         $this->registerConsoleCommand('queuedresize.clear', \Mercator\QueuedResize\Console\Clear::class);
-        
-        // Register the new global PHP function for use in code blocks/components
-        \App::bind('queuedresize_path', function() {
-            return app(\Mercator\QueuedResize\Classes\ImageResizer::class)->qresizePath(...func_get_args());
-        });
     }
 
     protected function client_supports_webp(): bool

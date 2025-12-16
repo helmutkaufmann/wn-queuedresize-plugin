@@ -214,17 +214,14 @@ class ImageResizer
         
         $this->ensureCacheDir($hash, $format);
         $input = $this->readSource($src);
-        
-        $pdfTempFile = null;
 
-        // PDF Processing (Optimized for Memory & Temp File Output)
+        // PDF Processing (Optimized for Memory)
         if ($srcExt === 'pdf') {
             if (!class_exists(Imagick::class)) {
                 throw new \RuntimeException('PDF support requires Imagick extension.');
             }
             $imagick = new Imagick();
-            $pdfTempFile = tempnam(sys_get_temp_dir(), 'pdf_thumb_'); // Use a temp file for output
-
+            
             try {
                 // OPTIMIZATION 1: Set low resolution (72 DPI) before reading
                 $imagick->setResolution(72, 72); 
@@ -245,18 +242,14 @@ class ImageResizer
                 $imagick->setImageFormat('jpeg');
                 $imagick->setImageCompressionQuality(90);
                 
-                // Save the generated JPEG thumbnail to the new temp file
-                $imagick->writeImage($pdfTempFile); 
-
-                // Set $input to the path of the JPEG thumbnail
-                $input = $pdfTempFile;
+                // Overwrite $input with the generated JPG blob
+                $input = $imagick->getImageBlob();
                 
                 $imagick->clear();
                 $imagick->destroy();
                 
             } catch (\Exception $e) {
-                // Ensure temp file is cleaned up on error
-                if (file_exists($pdfTempFile)) @unlink($pdfTempFile);
+                // Throw exception to be caught in batchResizeDirectory
                 throw new \RuntimeException('Failed to process PDF: ' . $src . ' - ' . $e->getMessage()); 
             }
         }
@@ -298,8 +291,6 @@ class ImageResizer
 
         } finally {
             if (file_exists($tempFile)) @unlink($tempFile);
-            // Clean up the PDF temp file
-            if (isset($pdfTempFile) && file_exists($pdfTempFile)) @unlink($pdfTempFile);
         }
 
         // Write Meta
@@ -321,110 +312,6 @@ class ImageResizer
     }
 
     /**
-     * Public method to queue resize jobs for a directory, callable from PHP blocks.
-     * If a single file is provided, it processes the file's parent directory.
-     */
-    public function qresizePath(string $path, ?int $w, ?int $h, array $opts = [], bool $recursive = false, string $disk = null): int
-    {
-        $disk = $disk ?: $this->disk;
-        $this->setDisk($disk);
-
-        $storage = Storage::disk($disk);
-        $targetPath = $path;
-        
-        // 1. If the path points to a single file, switch the target to the parent directory.
-        if ($storage->exists($path) && !$storage->isDirectory($path)) {
-            $targetPath = dirname($path);
-            if ($targetPath === '.' || empty($targetPath)) {
-                $targetPath = ''; // Root of the disk
-            }
-        }
-        
-        // 2. Path is now guaranteed to be a directory or disk root.
-        if (!$storage->isDirectory($targetPath) && !empty($targetPath)) {
-            return 0;
-        }
-
-        $scanPath = empty($targetPath) ? '' : $targetPath;
-        $files = $recursive ? $storage->allFiles($scanPath) : $storage->files($scanPath);
-
-        // Optimization: Filter by Extension
-        $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'avif'];
-        $targetFiles = array_filter($files, function($f) use ($allowedExtensions, $scanPath) {
-            if (!empty($scanPath) && !str_starts_with($f, $scanPath)) return false;
-            if (str_contains($f, 'resized/')) return false;
-            
-            $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
-            return in_array($ext, $allowedExtensions);
-        });
-        
-        $count = 0;
-        foreach ($targetFiles as $file) {
-            $this->queueResizeJob($file, $w, $h, $opts);
-            $count++;
-        }
-
-        return $count;
-    }
-
-    /**
-     * Helper method to dispatch the resize job (shared logic with Plugin.php).
-     */
-    protected function queueResizeJob(string $src, ?int $w, ?int $h, array $opts = []): void
-    {
-        $W = $w && $w > 0 ? (int) $w : null;
-        $H = $h && $h > 0 ? (int) $h : null;
-
-        if (!isset($opts['disk'])) {
-            $opts['disk'] = $this->disk;
-        }
-
-        $format = strtolower($opts['format'] ?? 'best');
-        switch ($format) {
-            case 'best':
-                $format = $this->client_supports_webp() ? 'webp' : 'jpg';
-                break;
-            case 'avif':
-            case 'jpeg':
-                $format = 'jpg';
-                break;
-            default: break;
-        }
-        $opts['format'] = $format;
-
-        // Perform hashing and metadata check to avoid queueing duplicates
-        ['mtime' => $mtime, 'size' => $size] = $this->getSourceStats($src);
-        $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
-        $metaRel = $this->nestedPath('resized', $hash, 'json');
-        
-        if (!Storage::disk($this->disk)->exists($metaRel)) {
-            $this->ensureCacheDir($hash, $format);
-
-            Storage::disk($this->disk)->put(
-                $metaRel,
-                json_encode([
-                    'src'   => $src,
-                    'w'     => $W,
-                    'h'     => $H,
-                    'opts'  => $opts,
-                    'disk'  => $this->disk,
-                    'mtime' => $mtime,
-                    'size'  => $size,
-                ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-            );
-        }
-
-        // Only dispatch the job if the final image doesn't exist
-        if (!$this->exists($hash, $format)) {
-            dispatch(
-                (new \Mercator\QueuedResize\Jobs\ProcessImageResize($src, $W, $H, $opts))
-                    ->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
-            );
-        }
-    }
-
-
-    /**
      * Batch Resize Directory (Optimized for Scanning)
      */
     public function batchResizeDirectory(string $path, array $dims, array $formats, array $baseOpts, bool $recursive, ?OutputStyle $output = null)
@@ -439,6 +326,7 @@ class ImageResizer
         $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'avif'];
         
         $targetFiles = array_filter($files, function($f) use ($allowedExtensions) {
+            // Skip the resized cache directory itself
             if (str_contains($f, 'resized/')) return false;
 
             $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
@@ -469,7 +357,7 @@ class ImageResizer
                         $this->resizeNow($file, $w, $h, $opts);
                         $count++;
                     } catch (\Exception $e) {
-                        // Silent fail
+                        // Silent fail (if PDF failed, it was caught in resizeNow)
                     }
                 }
             }
