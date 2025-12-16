@@ -32,7 +32,7 @@ class ProcessImageResize implements ShouldQueue
 
     public function handle(ImageResizer $resizer)
     {
-        $limit = (int) config('mercator.queuedresize::config.concurrency', 2);
+        $limit = (int) config('mercator.queuedresize::config.concurrency', 3);
         $backoff = (int) config('mercator.queuedresize::config.backoff', 5);
 
         $lockFile = storage_path('framework/cache/queuedresize.semaphore');

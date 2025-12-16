@@ -15,6 +15,29 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Concurrency Limit (NEW)
+    |--------------------------------------------------------------------------
+    |
+    | The maximum number of simultaneous image resize jobs that can run across 
+    | all workers at any given time. This uses a semaphore lock to prevent 
+    | overwhelming server CPU/memory during bulk processing.
+    |
+    */
+    'concurrency' => (int) env('IMAGE_RESIZE_CONCURRENCY', 3),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Backoff Time (NEW)
+    |--------------------------------------------------------------------------
+    |
+    | The number of seconds a job should wait before being released back to the 
+    | queue when the concurrency limit is reached.
+    |
+    */
+    'backoff' => (int) env('IMAGE_RESIZE_BACKOFF', 5),
+
+    /*
+    |--------------------------------------------------------------------------
     | Image driver
     |--------------------------------------------------------------------------
     |
@@ -64,6 +87,6 @@ return [
     |
     */
 
-    'quality' => (int) env('IMAGE_RESIZE_QUALITY', 60),
+    'quality' => (int) env('IMAGE_RESIZE_QUALITY', 80),
 
 ];

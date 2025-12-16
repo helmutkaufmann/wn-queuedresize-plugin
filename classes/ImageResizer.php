@@ -1,11 +1,12 @@
 <?php namespace Mercator\QueuedResize\Classes;
 
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Http\File as HttpFile; // Added for robust file handling
+use Illuminate\Http\File as HttpFile;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver as GdDriver;
 use Intervention\Image\Drivers\Imagick\Driver as ImDriver;
 use Imagick;
+use Symfony\Component\Console\Style\OutputStyle;
 
 class ImageResizer
 {
@@ -32,16 +33,10 @@ class ImageResizer
     }
 
     /**
-     * Get mtime and size stats for the source file.
-     * Expects a storage path relative to the disk root, or a local absolute path.
-     * HTTP(S) URLs return null stats (still valid for hashing).
+     * Get stats for hashing (mtime + size).
      */
     public function getSourceStats(string $src): array
     {
-        $mtime = null;
-        $size  = null;
-
-        // No reliable mtime/size for remote URLs
         if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
             return ['mtime' => null, 'size' => null];
         }
@@ -50,16 +45,9 @@ class ImageResizer
             if (Storage::disk($this->disk)->exists($src)) {
                 $mtime = Storage::disk($this->disk)->lastModified($src);
                 $size  = Storage::disk($this->disk)->size($src);
-
                 return ['mtime' => $mtime, 'size' => $size];
             }
-        } catch (\Exception $e) {
-            \Log::warning('QueuedResize: Could not get stats from disk.', [
-                'src'   => $src,
-                'disk'  => $this->disk,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        } catch (\Exception $e) {}
 
         if (file_exists($src)) {
             return ['mtime' => filemtime($src), 'size' => filesize($src)];
@@ -68,20 +56,11 @@ class ImageResizer
         return ['mtime' => null, 'size' => null];
     }
 
-    /**
-     * Stable hash for one resize job.
-     *
-     * Disk IS part of the hash to prevent collisions between otherwise
-     * identical resize requests targeting different filesystem disks.
-     */
     public function hash(string $src, ?int $w, ?int $h, array $opts, ?int $mtime = null, ?int $size = null): string
     {
-        // Ensure a deterministic disk value is included in the hash.
-        // If caller did not provide one, use the resizer's current disk.
         if (!array_key_exists('disk', $opts) || $opts['disk'] === null || $opts['disk'] === '') {
             $opts['disk'] = $this->disk;
         }
-
         ksort($opts);
 
         return sha1(
@@ -100,14 +79,12 @@ class ImageResizer
         $a = substr($h, 0, 2) ?: '00';
         $b = substr($h, 2, 2) ?: '00';
         $c = substr($h, 4, 2) ?: '00';
-
         return [$a, $b, $c];
     }
 
     public function nestedPath(string $base, string $hash, string $ext): string
     {
         [$a, $b, $c] = $this->hashDirs($hash);
-
         return trim($base, '/') . "/{$a}/{$b}/{$c}/{$hash}.{$ext}";
     }
 
@@ -125,60 +102,92 @@ class ImageResizer
 
     public function ensureCacheDir(string $hash, string $ext = 'jpg'): void
     {
-        // On remote disks (S3), paths are keys and directories don't physically exist,
-        // so we wrap this in a try/catch or simple check to avoid crashes.
         try {
             $path = Storage::disk($this->disk)->path(
                 $this->nestedPath('resized', $hash, $ext)
             );
             $dir = \dirname($path);
-
             if (!is_dir($dir)) {
                 @mkdir($dir, 0775, true);
             }
         } catch (\Exception $e) {
-            // Ignore directory creation errors on remote disks
+            // Ignore on remote disks (S3)
         }
     }
 
     public function exists(string $hash, string $ext = 'jpg'): bool
     {
         $rel = $this->nestedPath('resized', $hash, $ext);
-
         return Storage::disk($this->disk)->exists($rel);
     }
 
     protected function client_supports_webp(): bool
     {
+        if (app()->runningInConsole()) {
+            return true; 
+        }
         if (!isset($_SERVER['HTTP_ACCEPT'])) {
             return false;
         }
-
         return stripos($_SERVER['HTTP_ACCEPT'], 'image/webp') !== false;
     }
 
+    protected function readSource(string $src)
+    {
+        // 1. URLs
+        if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
+            return $src;
+        }
+
+        $storage = Storage::disk($this->disk);
+
+        // OPTIMIZATION: Try to use absolute path for local disks (avoids loading file content into PHP memory)
+        try {
+            $fullPath = $storage->path($src);
+            if (file_exists($fullPath)) {
+                return $fullPath; // Returns file system path
+            }
+        } catch (\Exception $e) {}
+
+        // Fallback: Read file content into memory (for S3 / Remote disks)
+        try {
+            if ($storage->exists($src)) {
+                return $storage->get($src); // Returns file content (string/blob)
+            }
+        } catch (\Exception $e) {}
+
+        if (file_exists($src)) {
+            return $src;
+        }
+
+        throw new \RuntimeException('Source not found on disk "' . $this->disk . '": ' . $src);
+    }
+
     /**
-     * Main resize entry point used by the queued job.
+     * Core Resizing Logic
      */
     public function resizeNow(string $src, ?int $w, ?int $h, array $opts): string
     {
         $W = $w && $w > 0 ? $w : null;
         $H = $h && $h > 0 ? $h : null;
+
+        // 1. EXTRACT FORCE FLAG (before hashing)
+        $force = !empty($opts['force']);
+        unset($opts['force']); // Critical: Remove force from options so it doesn't change the hash
+
         ksort($opts);
 
-        // Disk override in options
         if (isset($opts['disk']) && is_string($opts['disk']) && $opts['disk'] !== '') {
             $this->setDisk($opts['disk']);
         }
 
-        // File stats for hashing
         ['mtime' => $mtime, 'size' => $size] = $this->getSourceStats($src);
 
-        // Detect source extension (for PDF handling)
+        // Determine File Type (PDF support)
         $srcPathForExt = parse_url($src, PHP_URL_PATH) ?? $src;
         $srcExt        = strtolower(pathinfo($srcPathForExt, PATHINFO_EXTENSION));
 
-        // Determine output format
+        // Determine Format
         $format = strtolower($opts['format'] ?? 'best');
         switch ($format) {
             case 'best':
@@ -188,73 +197,73 @@ class ImageResizer
             case 'jpeg':
                 $format = 'jpg';
                 break;
-            default:
-                // jpg/png/gif/webp etc are passed through
-                break;
+            default: break;
         }
 
         $opts['format'] = $format;
         ksort($opts);
 
-        // Hash must use the same $src string as the filter
+        // Hashing
         $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
-        
-        // Calculate the relative path for Storage (the "Key")
         $relPath = $this->nestedPath('resized', $hash, $format);
 
-        // Check if exists
-        if (Storage::disk($this->disk)->exists($relPath)) {
+        // 2. CHECK FORCE FLAG
+        if (!$force && Storage::disk($this->disk)->exists($relPath)) {
              return $this->cachedPathFromHash($hash, $format);
         }
         
-        // Create directory if local (fails gracefully on S3)
         $this->ensureCacheDir($hash, $format);
-
-        // Read source (may be path, URL, or binary contents)
         $input = $this->readSource($src);
 
-        // If source is a PDF: render first page to JPEG blob using Imagick
+        // PDF Processing (Optimized for Memory)
         if ($srcExt === 'pdf') {
             if (!class_exists(Imagick::class)) {
-                throw new \RuntimeException('PDF support requires the Imagick PHP extension.');
+                throw new \RuntimeException('PDF support requires Imagick extension.');
             }
-
             $imagick = new Imagick();
+            
+            try {
+                // OPTIMIZATION 1: Set low resolution (72 DPI) before reading
+                $imagick->setResolution(72, 72); 
+                $imagick->setBackgroundColor('white');
 
-            $tmpPdf = tempnam(sys_get_temp_dir(), 'pdfsrc_');
-            if ($tmpPdf === false) {
-                throw new \RuntimeException('Could not create temporary file for PDF rendering.');
+                if (@is_file($input)) {
+                    // OPTIMIZATION 2: Load ONLY page 0 directly from disk path + '[0]'
+                    $imagick->readImage($input . '[0]'); 
+                } else {
+                    // Fallback for non-local disks (blobs)
+                    $imagick->readImageBlob($input);
+                    $imagick->setIteratorIndex(0);
+                }
+                
+                // Flatten layers
+                $imagick = $imagick->mergeImageLayers(Imagick::LAYERMETHOD_FLATTEN);
+                
+                $imagick->setImageFormat('jpeg');
+                $imagick->setImageCompressionQuality(90);
+                
+                // Overwrite $input with the generated JPG blob
+                $input = $imagick->getImageBlob();
+                
+                $imagick->clear();
+                $imagick->destroy();
+                
+            } catch (\Exception $e) {
+                // Throw exception to be caught in batchResizeDirectory
+                throw new \RuntimeException('Failed to process PDF: ' . $src . ' - ' . $e->getMessage()); 
             }
-
-            file_put_contents($tmpPdf, $input);
-            $imagick->readImage($tmpPdf . '[0]');
-            @unlink($tmpPdf);
-
-            $imagick->setImageColorspace(Imagick::COLORSPACE_RGB);
-            $imagick->setImageFormat('jpeg');
-            $imagick->setImageCompression(Imagick::COMPRESSION_JPEG);
-            $imagick->setImageCompressionQuality(90);
-
-            // Now we have a JPEG blob – feed this into Intervention
-            $input = $imagick->getImageBlob();
-
-            $imagick->clear();
-            $imagick->destroy();
         }
 
-        // At this point, $input is a "normal" image (binary or path)
+        // Intervention Processing
         $img = $this->manager->read($input);
-
+        
         $mode    = $opts['mode'] ?? 'auto';
         $quality = (int) ($opts['quality'] ?? 60);
 
         switch ($mode) {
             case 'crop':
-                if ($W && $H) {
-                    $img = $img->cover($W, $H, 'center');
-                } else {
-                    $img = $img->scaleDown($W, $H);
-                }
+                if ($W && $H) $img = $img->cover($W, $H, 'center');
+                else $img = $img->scaleDown($W, $H);
                 break;
             case 'fit':
             default:
@@ -262,31 +271,18 @@ class ImageResizer
                 break;
         }
 
-        // ---------------------------------------------------------
-        // FIX: Save to Local Temp File First, Then Upload
-        // ---------------------------------------------------------
-        
+        // Save to Temp & Upload
         $tempFile = tempnam(sys_get_temp_dir(), 'resize_out_');
         
         try {
-            // Save image to the local temp file
             switch ($format) {
-                case 'webp':
-                    $img->toWebp($quality)->save($tempFile);
-                    break;
-                case 'png':
-                    $img->toPng()->save($tempFile);
-                    break;
-                case 'gif':
-                    $img->toGif()->save($tempFile);
-                    break;
-                case 'jpg':
-                default:
-                    $img->toJpeg($quality)->save($tempFile);
-                    break;
+                case 'webp': $img->toWebp($quality)->save($tempFile); break;
+                case 'png':  $img->toPng()->save($tempFile); break;
+                case 'gif':  $img->toGif()->save($tempFile); break;
+                case 'jpg': 
+                default:     $img->toJpeg($quality)->save($tempFile); break;
             }
 
-            // Upload the temp file to the target disk (Atomic/Streamed)
             Storage::disk($this->disk)->putFileAs(
                 dirname($relPath), 
                 new HttpFile($tempFile), 
@@ -294,15 +290,11 @@ class ImageResizer
             );
 
         } finally {
-            // Ensure temp file is always deleted
-            if (file_exists($tempFile)) {
-                @unlink($tempFile);
-            }
+            if (file_exists($tempFile)) @unlink($tempFile);
         }
 
-        // Write meta JSON next to the image
+        // Write Meta
         $metaRel = $this->nestedPath('resized', $hash, 'json');
-
         Storage::disk($this->disk)->put(
             $metaRel,
             json_encode([
@@ -320,33 +312,147 @@ class ImageResizer
     }
 
     /**
-     * Read source image.
-     * - HTTP(S) → return URL (Intervention can read it directly)
-     * - Otherwise try Storage disk, then local filesystem.
+     * Batch Resize Directory (Optimized for Scanning)
      */
-    protected function readSource(string $src)
+    public function batchResizeDirectory(string $path, array $dims, array $formats, array $baseOpts, bool $recursive, ?OutputStyle $output = null)
     {
-        if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
-            return $src; // Intervention can read from URL
+        $storage = Storage::disk($this->disk);
+        
+        if ($output) $output->write("Scanning files... ");
+        
+        $files = $recursive ? $storage->allFiles($path) : $storage->files($path);
+        
+        // Filter by Extension (Fast, CPU-only check)
+        $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'avif'];
+        
+        $targetFiles = array_filter($files, function($f) use ($allowedExtensions) {
+            // Skip the resized cache directory itself
+            if (str_contains($f, 'resized/')) return false;
+
+            $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+            return in_array($ext, $allowedExtensions);
+        });
+        
+        $total = count($targetFiles);
+        if ($output) {
+            $output->writeln("Found $total images.");
+            $bar = $output->createProgressBar($total);
+            $bar->start();
         }
 
-        // Try to read from the configured disk
-        try {
-            if (Storage::disk($this->disk)->exists($src)) {
-                // Return the raw content, as Intervention can read this
-                return Storage::disk($this->disk)->get($src);
+        $count = 0;
+        
+        foreach ($targetFiles as $file) {
+            // Loop Dimensions
+            foreach ($dims as $dim) {
+                $w = $dim['w'];
+                $h = $dim['h'];
+
+                // Loop Formats
+                foreach ($formats as $fmt) {
+                    $opts = $baseOpts;
+                    $opts['format'] = trim($fmt);
+
+                    try {
+                        $this->resizeNow($file, $w, $h, $opts);
+                        $count++;
+                    } catch (\Exception $e) {
+                        // Silent fail (if PDF failed, it was caught in resizeNow)
+                    }
+                }
             }
-        } catch (\Exception $e) {
-            // Fallback to checking local filesystem
+
+            if ($output) $bar->advance();
+
+            // Aggressive Garbage Collection
+            if ($count % 50 === 0) {
+                gc_collect_cycles();
+            }
         }
 
-        // Fallback for absolute local paths
-        if (file_exists($src)) {
-            return $src;
+        if ($output) {
+            $bar->finish();
+            $output->newLine();
         }
 
-        throw new \RuntimeException(
-            'Source not found on disk "' . $this->disk . '": ' . $src
-        );
+        return $count;
+    }
+
+    /**
+     * Prune Orphans
+     */
+    public function prune(bool $dryRun, ?OutputStyle $output = null)
+    {
+        $storage = Storage::disk($this->disk);
+        $allFiles = $storage->allFiles('resized');
+        
+        $deleted = 0;
+        foreach ($allFiles as $file) {
+            if (!str_ends_with($file, '.json')) continue;
+
+            try {
+                $meta = json_decode($storage->get($file), true);
+                if (!$meta || !isset($meta['src'])) continue;
+
+                $src = $meta['src'];
+                $srcExists = true;
+                if (!str_starts_with($src, 'http')) {
+                    $srcExists = $storage->exists($src);
+                }
+
+                if (!$srcExists) {
+                    $format = $meta['opts']['format'] ?? 'jpg';
+                    $hash = pathinfo($file, PATHINFO_FILENAME);
+                    $imagePath = $this->nestedPath('resized', $hash, $format);
+
+                    if ($output) $output->writeln(($dryRun ? '[DRY] ' : '') . "Pruning orphan: $src ($file)");
+
+                    if (!$dryRun) {
+                        $storage->delete($file);
+                        $storage->delete($imagePath);
+                    }
+                    $deleted++;
+                }
+            } catch (\Exception $e) {}
+        }
+        return $deleted;
+    }
+
+    /**
+     * Clear Cache
+     */
+    public function clearCache(array $filters, bool $dryRun, ?OutputStyle $output = null)
+    {
+        $storage = Storage::disk($this->disk);
+        $allFiles = $storage->allFiles('resized');
+        
+        $deleted = 0;
+        foreach ($allFiles as $file) {
+            if (!str_ends_with($file, '.json')) continue;
+
+            $content = $storage->get($file);
+            $meta = json_decode($content, true);
+            if (!$meta) continue;
+
+            $matches = true;
+            if (isset($filters['w']) && ($meta['w'] ?? null) != $filters['w']) $matches = false;
+            if (isset($filters['h']) && ($meta['h'] ?? null) != $filters['h']) $matches = false;
+            if (isset($filters['path']) && !str_contains($meta['src'] ?? '', $filters['path'])) $matches = false;
+
+            if ($matches) {
+                $format = $meta['opts']['format'] ?? 'jpg';
+                $hash = pathinfo($file, PATHINFO_FILENAME);
+                $imagePath = $this->nestedPath('resized', $hash, $format);
+
+                if ($output) $output->writeln(($dryRun ? '[DRY] ' : '') . "Deleting: " . ($meta['src'] ?? 'unknown'));
+
+                if (!$dryRun) {
+                    $storage->delete($file);
+                    $storage->delete($imagePath);
+                }
+                $deleted++;
+            }
+        }
+        return $deleted;
     }
 }

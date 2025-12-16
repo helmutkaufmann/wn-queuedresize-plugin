@@ -1,6 +1,5 @@
 <?php namespace Mercator\QueuedResize;
 
-use Illuminate\Support\Facades\Storage;
 use System\Classes\PluginBase;
 
 class Plugin extends PluginBase
@@ -23,6 +22,13 @@ class Plugin extends PluginBase
         ];
     }
 
+    public function register()
+    {
+        $this->registerConsoleCommand('queuedresize.warmup', \Mercator\QueuedResize\Console\WarmUp::class);
+        $this->registerConsoleCommand('queuedresize.prune', \Mercator\QueuedResize\Console\Prune::class);
+        $this->registerConsoleCommand('queuedresize.clear', \Mercator\QueuedResize\Console\Clear::class);
+    }
+
     protected function client_supports_webp(): bool
     {
         if (!isset($_SERVER['HTTP_ACCEPT'])) {
@@ -34,59 +40,37 @@ class Plugin extends PluginBase
 
     /**
      * Normalize a src so qresize can be used like resize:
-     * - Accepts:
-     *   * "media/foo.jpg" (storage path)
-     *   * "/storage/app/media/foo.jpg" or any disk URL
-     *   * full http(s) URLs (kept as-is unless they match disk base URL)
-     * - For disk URLs, returns a storage path relative to the disk root.
-     * - Decodes URL-encoding (%20 → space) for the storage path.
      */
     protected function normalizeSrcForDisk(string $src, string $disk): string
     {
         $src = (string) $src;
-
-        // Full external HTTP(S) URL path we might be able to map back to this disk
         $isHttp = str_starts_with($src, 'http://') || str_starts_with($src, 'https://');
 
         try {
-            // Derive disk base URL by probing an artificial marker
             $marker   = '__qresize_marker__';
-            $probeUrl = Storage::disk($disk)->url($marker);
+            $probeUrl = \Storage::disk($disk)->url($marker);
 
             $pos      = strpos($probeUrl, $marker);
             $diskBase = $pos !== false ? substr($probeUrl, 0, $pos) : $probeUrl;
             $diskBase = rtrim($diskBase, '/');
 
-            // If the input starts with the disk base URL, strip it
             if ($diskBase !== '' && str_starts_with($src, $diskBase)) {
                 $rel = substr($src, strlen($diskBase));
                 $rel = ltrim($rel, '/');
-
-                // Decode any URL encoding so Storage gets the real filename
                 return rawurldecode($rel);
             }
         } catch (\Exception $e) {
-            // If disk->url() isn't supported, fall back to treating input as path/URL directly
+            // If disk->url() isn't supported, fall back
         }
 
-        // If it’s an http(s) URL but not for this disk, keep it as remote URL
         if ($isHttp) {
             return $src;
         }
 
-        // Otherwise treat it as a storage path, trimming leading slash and decoding
         $path = ltrim($src, '/');
-
         return rawurldecode($path);
     }
 
-    /**
-     * qresize(src, w, h, opts = { mode: 'auto', quality: 60, disk?: 's3' })
-     *
-     * Drop-in replacement for resize:
-     * - Accepts same kind of input (|media URL, raw media path, http URL)
-     * - Works across different disks via the disk option and disk base URL detection.
-     */
     public function processQueuedResize($src, $w = null, $h = null, array $opts = [])
     {
         /** @var \Mercator\QueuedResize\Classes\ImageResizer $resizer */
@@ -96,20 +80,14 @@ class Plugin extends PluginBase
         $H = $h && $h > 0 ? (int) $h : null;
         ksort($opts);
 
-        // Determine disk
         $disk = isset($opts['disk']) && is_string($opts['disk']) && $opts['disk'] !== ''
             ? (string) $opts['disk']
             : (string) config('mercator.queuedresize::config.disk', 'local');
 
         $resizer->setDisk($disk);
 
-        // Normalize src so that:
-        // - URLs for this disk become storage paths (media/...)
-        // - http(s) URLs for other hosts stay URLs
-        // - raw media paths stay media paths, url-decoded
         $src = $this->normalizeSrcForDisk((string) $src, $disk);
 
-        // Determine format
         $format = strtolower($opts['format'] ?? 'best');
         switch ($format) {
             case 'best':
@@ -120,26 +98,20 @@ class Plugin extends PluginBase
                 $format = 'jpg';
                 break;
             default:
-                // jpg/png/gif/webp passed through
                 break;
         }
 
         $opts['format'] = $format;
         ksort($opts);
 
-        // Get mtime/size via shared logic
         ['mtime' => $mtime, 'size' => $size] = $resizer->getSourceStats($src);
-
-        // Hash uses the normalized src
         $hash = $resizer->hash($src, $W, $H, $opts, $mtime, $size);
-
-        // Ensure meta JSON next to image
         $metaRel = $resizer->nestedPath('resized', $hash, 'json');
 
-        if (!Storage::disk($disk)->exists($metaRel)) {
+        if (!\Storage::disk($disk)->exists($metaRel)) {
             $resizer->ensureCacheDir($hash, $format);
 
-            Storage::disk($disk)->put(
+            \Storage::disk($disk)->put(
                 $metaRel,
                 json_encode([
                     'src'   => $src,
@@ -153,15 +125,14 @@ class Plugin extends PluginBase
             );
         }
 
-        // Queue job if resized image does not yet exist
         if (!$resizer->exists($hash, $format)) {
+            \Log::info("qresize dispatching: $src on disk $disk");
             dispatch(
                 (new \Mercator\QueuedResize\Jobs\ProcessImageResize($src, $W, $H, $opts))
                     ->onQueue(config('mercator.queuedresize::config.queue', 'imaging'))
             );
         }
 
-        // Return cached URL (like resize does)
         return $resizer->cachedUrl($hash);
     }
 }
