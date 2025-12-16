@@ -80,7 +80,7 @@ Recursively generates resized images for a directory.
 | **`--mode`** |  | No | Resize mode (auto, crop, fit). | `crop` |
 | **`--quality`** |  | No | Output quality (0-100). | `90` |
 
-** Example Usage (Best Practice):**
+**Example Usage (Best Practice):**
 
 ```bash
 # Execute with high memory and force regeneration of two sizes (400px wide, 800px wide)
