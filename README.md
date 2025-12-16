@@ -1,5 +1,6 @@
 
-# Queued Resize Plugin for WinterCMS (Mercator.QueuedResize)This plugin provides an asynchronous and memory-efficient solution for handling image resizing in WinterCMS. By offloading resource-intensive image processing to the Laravel Queue, it prevents synchronous page loads from becoming slow and avoids server exhaustion, making it ideal for large media libraries and high-traffic environments.
+# Queued Resize Plugin for WinterCMS (Mercator.QueuedResize)
+This plugin provides an asynchronous and memory-efficient solution for handling image resizing in WinterCMS. By offloading resource-intensive image processing to the Laravel Queue, it prevents synchronous page loads from becoming slow and avoids server exhaustion, making it ideal for large media libraries and high-traffic environments.
 
 ### Features 
 | Summary| Category | Feature | Benefit |
@@ -25,8 +26,8 @@ The plugin uses a dedicated configuration file (`config.php`) which pulls its va
 | `IMAGE_RESIZE_CONCURRENCY` | `3` | **(Critical)** The maximum number of simultaneous resize jobs that can run at once. | `ProcessImageResize.php` |
 | `IMAGE_RESIZE_BACKOFF` | `5` | The number of seconds a job should wait before being re-released to the queue if the concurrency limit is reached. | `ProcessImageResize.php` |
 
-### Starting Queue WorkersThe plugin is useless without a running queue worker. You should use a process manager (like Supervisor) to ensure this command runs continuously:
-
+### Starting Queue Workers
+The plugin is useless without a running queue worker. You should use a process manager (like Supervisor) to ensure this command runs continuously:
 ```bash
 # Start a worker process dedicated to the 'imaging' queue
 php artisan queue:work --queue=imaging --tries=3 --timeout=3600
@@ -34,7 +35,8 @@ php artisan queue:work --queue=imaging --tries=3 --timeout=3600
 ```
 ---
 
-## 2. Twig Filter: `qresize` - Detailed ParametersThe `qresize` filter is the primary tool for using the plugin in your templates. It instantly returns a URL, deferring the actual work to the background.
+## 2. Twig Filter: `qresize` - Detailed Parameters
+The `qresize` filter is the primary tool for using the plugin in your templates. It instantly returns a URL, deferring the actual work to the background.
 
 ### Twig Syntax
 ```twig
@@ -50,7 +52,7 @@ php artisan queue:work --queue=imaging --tries=3 --timeout=3600
 | **`height`** | `int/null` | No | The desired output height in pixels. Must be provided if `width` is not. | `300` |
 | **`options`** | `array` | No | An array of key/value pairs to control the resizing process. | `{'mode': 'crop', 'quality': 90}` |
 
-###Options Array Keys (`opts`)
+### Options Array Keys (`opts`)
 These control the *specific* resizing job:
 | Key | Type | Description | Default (from config) |
 | --- | --- | --- | --- |
@@ -61,9 +63,11 @@ These control the *specific* resizing job:
 
 ---
 
-## 3. Command Line Interface (CLI) - All ParametersThe CLI commands are used for mass generation and maintenance.
+## 3. Command Line Interface (CLI) - All Parameters
+The CLI commands are used for mass generation and maintenance.
 
-### A. `queuedresize:warmup` (Batch Processing)Recursively generates resized images for a directory.
+### A. `queuedresize:warmup` (Batch Processing)
+Recursively generates resized images for a directory.
 | Parameter | Alias | Required | Description | Example Value |
 | --- | --- | --- | --- | --- |
 | **`path`** | (argument) | Yes | The relative folder path to scan for original images (e.g., inside `storage/app/media`). | `"media/gallery"` |
@@ -84,7 +88,8 @@ php -d memory_limit=1024M artisan queuedresize:warmup "media/gallery" --width=40
 
 ```
 
-### B. `queuedresize:clear` (Cache Cleanup)Removes resized images based on filter criteria.
+### B. `queuedresize:clear` (Cache Cleanup)
+Removes resized images based on filter criteria.
 
 | Parameter | Alias | Required | Description | Example Value |
 | --- | --- | --- | --- | --- |
@@ -102,7 +107,8 @@ php artisan queuedresize:clear --path=uploads/temp --dry-run
 
 ```
 
-###  C. `queuedresize:prune` (Orphan Removal)Removes cached resized images where the original source file no longer exists (i.e., orphans).
+###  C. `queuedresize:prune` (Orphan Removal)
+Removes cached resized images where the original source file no longer exists (i.e., orphans).
 
 | Parameter | Alias | Required | Description | Example Value |
 | --- | --- | --- | --- | --- |
