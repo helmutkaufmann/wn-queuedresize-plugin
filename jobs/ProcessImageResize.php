@@ -5,7 +5,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Mercator\QueuedResize\Classes\ImageResizer;
-use Illuminate\Support\Facades\Storage;
 
 class ProcessImageResize implements ShouldQueue
 {
@@ -19,37 +18,35 @@ class ProcessImageResize implements ShouldQueue
 
     public function __construct(string $src, ?int $w, ?int $h, array $opts = [])
     {
-        $this->disk = isset($opts['disk']) && is_string($opts['disk']) && $opts['disk'] !== ''
-            ? (string) $opts['disk']
-            : (string) config('mercator.queuedresize::config.disk', 'local');
-
-        $this->onQueue(config('mercator.queuedresize::config.queue', 'imaging'));
         $this->src = $src;
         $this->w = $w;
         $this->h = $h;
         $this->opts = $opts;
+        $this->disk = $opts['disk'] ?? config('mercator.queuedresize::config.disk', 'local');
     }
 
     public function handle(ImageResizer $resizer)
     {
         $limit = (int) config('mercator.queuedresize::config.concurrency', 3);
         $backoff = (int) config('mercator.queuedresize::config.backoff', 5);
-
         $lockFile = storage_path('framework/cache/queuedresize.semaphore');
-        if (!is_dir(\dirname($lockFile))) {
-            mkdir(\dirname($lockFile), 0775, true);
-        }
+
+        if (!is_dir(dirname($lockFile))) @mkdir(dirname($lockFile), 0775, true);
+        
         $fh = fopen($lockFile, 'c+');
-        if (!$fh) { $this->release($backoff); return; }
-        if (!flock($fh, LOCK_EX)) { fclose($fh); $this->release($backoff); return; }
+        if (!$fh || !flock($fh, LOCK_EX)) {
+            if ($fh) fclose($fh);
+            return $this->release($backoff);
+        }
 
-        $buf = stream_get_contents($fh);
-        $count = $buf !== false && strlen($buf) > 0 ? (int) trim($buf) : 0;
-        if ($count >= $limit) { flock($fh, LOCK_UN); fclose($fh); $this->release($backoff); return; }
+        $count = (int) trim(stream_get_contents($fh) ?: '0');
+        if ($count >= $limit) {
+            flock($fh, LOCK_UN); fclose($fh);
+            return $this->release($backoff);
+        }
 
-        $count++;
         ftruncate($fh, 0); rewind($fh);
-        fwrite($fh, (string) $count); fflush($fh);
+        fwrite($fh, (string)($count + 1)); fflush($fh);
         flock($fh, LOCK_UN); fclose($fh);
 
         try {
@@ -58,11 +55,9 @@ class ProcessImageResize implements ShouldQueue
         } finally {
             $fh2 = fopen($lockFile, 'c+');
             if ($fh2 && flock($fh2, LOCK_EX)) {
-                $buf2 = stream_get_contents($fh2);
-                $count2 = $buf2 !== false && strlen($buf2) > 0 ? (int) trim($buf2) : 0;
-                $count2 = max(0, $count2 - 1);
+                $c2 = max(0, (int)trim(stream_get_contents($fh2) ?: '0') - 1);
                 ftruncate($fh2, 0); rewind($fh2);
-                fwrite($fh2, (string) $count2); fflush($fh2); flock($fh2, LOCK_UN);
+                fwrite($fh2, (string)$c2); fflush($fh2); flock($fh2, LOCK_UN);
             }
             if ($fh2) fclose($fh2);
         }

@@ -22,7 +22,7 @@ return [
     | overwhelming server CPU/memory during bulk processing.
     |
     */
-    'concurrency' => (int) env('IMAGE_RESIZE_CONCURRENCY', 3),
+    'concurrency' => (int) env('IMAGE_RESIZE_CONCURRENCY', 2),
 
     /*
     |--------------------------------------------------------------------------
@@ -43,7 +43,7 @@ return [
     | The Intervention Image driver to use: "gd" or "imagick".
     |
     */
-    'driver' => env('IMAGE_RESIZE_DRIVER', 'imagick'),
+    'driver' => env('IMAGE_RESIZE_DRIVER', 'gd'),
 
     /*
     |--------------------------------------------------------------------------
