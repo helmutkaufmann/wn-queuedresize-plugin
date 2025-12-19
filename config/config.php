@@ -22,7 +22,7 @@ return [
     | overwhelming server CPU/memory during bulk processing.
     |
     */
-    'concurrency' => (int) env('IMAGE_RESIZE_CONCURRENCY', 5),
+    'concurrency' => (int) env('IMAGE_RESIZE_CONCURRENCY', 3),
 
     /*
     |--------------------------------------------------------------------------
