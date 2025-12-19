@@ -20,6 +20,7 @@ class ImageResizer
         $driver = $drv === 'imagick' ? new ImDriver() : new GdDriver();
 
         $this->manager = new ImageManager($driver);
+        // Default disk from config
         $this->disk    = (string) config('mercator.queuedresize::config.disk', 'local');
     }
 
@@ -33,20 +34,29 @@ class ImageResizer
         return $this->disk;
     }
 
+    /**
+     * Retrieves file stats. Uses Storage abstraction to work on both S3 and Local.
+     */
     public function getSourceStats(string $src): array
     {
         if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
             return ['mtime' => null, 'size' => null];
         }
 
-        try {
-            if (Storage::disk($this->disk)->exists($src)) {
-                $mtime = Storage::disk($this->disk)->lastModified($src);
-                $size  = Storage::disk($this->disk)->size($src);
-                return ['mtime' => $mtime, 'size' => $size];
-            }
-        } catch (\Exception $e) {}
+        $storage = Storage::disk($this->disk);
 
+        try {
+            if ($storage->exists($src)) {
+                return [
+                    'mtime' => $storage->lastModified($src),
+                    'size'  => $storage->size($src)
+                ];
+            }
+        } catch (\Exception $e) {
+            \Log::debug("qresize: Stats failed for $src on disk {$this->disk}: " . $e->getMessage());
+        }
+
+        // Fallback for absolute paths outside of Storage management
         if (file_exists($src)) {
             return ['mtime' => filemtime($src), 'size' => filesize($src)];
         }
@@ -88,9 +98,15 @@ class ImageResizer
 
     public function cachedPathFromHash(string $hash, string $ext = 'jpg'): string
     {
-        return Storage::disk($this->disk)->path(
-            $this->nestedPath('resized', $hash, $ext)
-        );
+        // path() only works on local drivers. 
+        // For remote, we rely on the relative path in Storage calls.
+        try {
+            return Storage::disk($this->disk)->path(
+                $this->nestedPath('resized', $hash, $ext)
+            );
+        } catch (\Exception $e) {
+            return $this->nestedPath('resized', $hash, $ext);
+        }
     }
 
     public function cachedUrl(string $hash): string
@@ -100,6 +116,11 @@ class ImageResizer
 
     public function ensureCacheDir(string $hash, string $ext = 'jpg'): void
     {
+        // Cache directories only make sense on local disks
+        if (config("filesystems.disks.{$this->disk}.driver") !== 'local') {
+            return;
+        }
+
         try {
             $path = Storage::disk($this->disk)->path(
                 $this->nestedPath('resized', $hash, $ext)
@@ -119,15 +140,15 @@ class ImageResizer
 
     protected function client_supports_webp(): bool
     {
-        if (app()->runningInConsole()) {
-            return true; 
-        }
-        if (!isset($_SERVER['HTTP_ACCEPT'])) {
-            return false;
-        }
+        if (app()->runningInConsole()) return true;
+        if (!isset($_SERVER['HTTP_ACCEPT'])) return false;
         return stripos($_SERVER['HTTP_ACCEPT'], 'image/webp') !== false;
     }
 
+    /**
+     * Reads the source. Returns path string for Local (efficient), 
+     * or binary blob for Cloud (S3).
+     */
     protected function readSource(string $src)
     {
         if (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
@@ -136,24 +157,24 @@ class ImageResizer
 
         $storage = Storage::disk($this->disk);
 
-        try {
-            $fullPath = $storage->path($src);
-            if (file_exists($fullPath)) {
-                return $fullPath; 
-            }
-        } catch (\Exception $e) {}
+        // Local optimization: use path instead of loading content
+        if (config("filesystems.disks.{$this->disk}.driver") === 'local') {
+            try {
+                $fullPath = $storage->path($src);
+                if (file_exists($fullPath)) return $fullPath;
+            } catch (\Exception $e) {}
+        }
 
+        // Remote/Cloud Disks: load binary blob
         try {
             if ($storage->exists($src)) {
                 return $storage->get($src); 
             }
         } catch (\Exception $e) {}
 
-        if (file_exists($src)) {
-            return $src;
-        }
+        if (file_exists($src)) return $src;
 
-        throw new \RuntimeException('Source not found: ' . $src);
+        throw new \RuntimeException("Source not found: $src on disk {$this->disk}");
     }
 
     public function resizeNow(string $src, ?int $w, ?int $h, array $opts): string
@@ -164,11 +185,11 @@ class ImageResizer
         $force = !empty($opts['force']);
         unset($opts['force']); 
 
-        ksort($opts);
+        // Sync internal disk state
+        $targetDisk = $opts['disk'] ?? $this->disk;
+        $this->setDisk($targetDisk);
 
-        if (isset($opts['disk']) && is_string($opts['disk']) && $opts['disk'] !== '') {
-            $this->setDisk($opts['disk']);
-        }
+        ksort($opts);
 
         ['mtime' => $mtime, 'size' => $size] = $this->getSourceStats($src);
 
@@ -188,20 +209,18 @@ class ImageResizer
         $hash = $this->hash($src, $W, $H, $opts, $mtime, $size);
         $relPath = $this->nestedPath('resized', $hash, $format);
 
+        // Cache Check
         if (!$force && Storage::disk($this->disk)->exists($relPath)) {
              return $this->cachedPathFromHash($hash, $format);
         }
-        
-        Log::info("qresize $src");
         
         $this->ensureCacheDir($hash, $format);
         $input = $this->readSource($src);
         $pdfTempFile = null;
 
+        // PDF Handling (Imagick)
         if ($srcExt === 'pdf') {
-            if (!class_exists(Imagick::class)) {
-                throw new \RuntimeException('Imagick needed for PDF.');
-            }
+            if (!class_exists(Imagick::class)) throw new \RuntimeException('Imagick needed for PDF.');
             $imagick = new Imagick();
             $pdfTempFile = tempnam(sys_get_temp_dir(), 'pdf_qres_');
 
@@ -227,6 +246,7 @@ class ImageResizer
             }
         }
 
+        // Intervention Image Processing
         $img = $this->manager->read($input);
         $mode = $opts['mode'] ?? 'auto';
         $quality = (int) ($opts['quality'] ?? 80);
@@ -245,12 +265,14 @@ class ImageResizer
                 case 'jpg': 
                 default:     $img->toJpeg($quality)->save($tempFile); break;
             }
+            // Move file to target disk
             Storage::disk($this->disk)->putFileAs(dirname($relPath), new HttpFile($tempFile), basename($relPath));
         } finally {
             if (file_exists($tempFile)) @unlink($tempFile);
             if ($pdfTempFile && file_exists($pdfTempFile)) @unlink($pdfTempFile);
         }
 
+        // Write Metadata (JSON)
         $metaRel = $this->nestedPath('resized', $hash, 'json');
         Storage::disk($this->disk)->put($metaRel, json_encode([
             'src' => $src, 'w' => $W, 'h' => $H, 'opts' => $opts, 'disk' => $this->disk, 'mtime' => $mtime, 'size' => $size
@@ -316,7 +338,7 @@ class ImageResizer
     public function batchResizeDirectory(string $path, array $dims, array $formats, array $baseOpts, bool $recursive, ?OutputStyle $output = null)
     {
         $storage = Storage::disk($this->disk);
-        if ($output) $output->write("Scanning files... ");
+        if ($output) $output->write("Scanning files on disk [{$this->disk}]... ");
         
         $files = $recursive ? $storage->allFiles($path) : $storage->files($path);
         $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'avif'];
@@ -335,6 +357,7 @@ class ImageResizer
 
         $count = 0;
         foreach ($targetFiles as $file) {
+            if ($output) $output->writeln(" Processing: " . $file);
             foreach ($dims as $dim) {
                 foreach ($formats as $fmt) {
                     $opts = $baseOpts;
@@ -342,7 +365,9 @@ class ImageResizer
                     try {
                         $this->resizeNow($file, $dim['w'], $dim['h'], $opts);
                         $count++;
-                    } catch (\Exception $e) {}
+                    } catch (\Exception $e) {
+                        if ($output) $output->writeln(" Error: " . $e->getMessage());
+                    }
                 }
             }
             if ($output) $bar->advance();

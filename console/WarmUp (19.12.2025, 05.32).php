@@ -39,25 +39,11 @@ class WarmUp extends Command
 
         $this->info("Warming up directory: $path (Force: " . ($force ? 'Yes' : 'No') . ")");
 
-        $options = [];
-
-        $mode = $this->option('mode');
-        if (($mode !== null) && strcmp($mode, "auto")) {
-            $options['mode'] = $mode;
-        }
-
-        $quality = $this->option('quality');
-        if ($quality !== null) {
-            $options['quality'] = (int)$quality;
-        }
-
-        $force = $this->option('force');
-        if ($force !== null) {
-            $options['force'] = $force;
-        }
-
-        $resizer->batchResizeDirectory($path, $dims, $formats, $options, $recursive, $this->output);
-
+        $resizer->batchResizeDirectory($path, $dims, $formats, [
+            'mode'    => $this->option('mode'),
+            'quality' => (int)$this->option('quality'),
+            'force'   => $force,
+        ], $recursive, $this->output);
 
         $this->info("Warmup complete.");
     }
@@ -72,7 +58,7 @@ class WarmUp extends Command
             ['height', null, InputOption::VALUE_OPTIONAL, 'Target height(s)', 0],
             ['mode', null, InputOption::VALUE_OPTIONAL, 'Resize mode'],
             ['quality', null, InputOption::VALUE_OPTIONAL, 'Quality'],
-            ['format', null, InputOption::VALUE_OPTIONAL, 'Formats', 'jpg'],
+            ['format', null, InputOption::VALUE_OPTIONAL, 'Formats'],
             ['recursive', 'r', InputOption::VALUE_NONE, 'Recursive scan'],
             ['force', 'f', InputOption::VALUE_NONE, 'Force regeneration'],
         ];

@@ -3,6 +3,7 @@
 use System\Classes\PluginBase;
 use App;
 use Mercator\QueuedResize\Classes\ImageResizer;
+use Log;
 
 class Plugin extends PluginBase
 {
@@ -65,8 +66,8 @@ class Plugin extends PluginBase
     public function processQueuedResize($src, $w = null, $h = null, array $opts = [])
     {
         $resizer = app(ImageResizer::class);
-        $W = $w && $w > 0 ? (int) $w : null;
-        $H = $h && $h > 0 ? (int) $h : null;
+        $W = $w && $w > 0 ? (int) $w : 0;
+        $H = $h && $h > 0 ? (int) $h : 0;
         
         $disk = (string) ($opts['disk'] ?? config('mercator.queuedresize::config.disk', 'local'));
         $resizer->setDisk($disk);
@@ -91,6 +92,7 @@ class Plugin extends PluginBase
         if (!$resizer->exists($hash, $format)) {
             dispatch((new \Mercator\QueuedResize\Jobs\ProcessImageResize($src, $W, $H, $opts))
                 ->onQueue(config('mercator.queuedresize::config.queue', 'imaging')));
+            Log::info("qresize $src on $disk");
         }
 
         return $resizer->cachedUrl($hash);
