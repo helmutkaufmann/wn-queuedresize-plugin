@@ -11,6 +11,56 @@ use Log;
 
 class ImageResizer
 {
+    /**
+     * Canonicalize Mercator Secret signed URLs so that changing signatures/expiries
+     * do not change the resize hash for the same underlying target.
+     *
+     * Supported Secret route: /mercator-secret-download?t=<encrypted>
+     * Payload formats (see mercator/secret):
+     *  - storage: {mode:"storage", p:"path", d:"disk", del:0|1}
+     *  - url:     {mode:"url", u:"https://..."}
+     */
+    protected function canonicalSrc(string $src): string
+    {
+        // Fast path: only attempt when it looks like a Secret download URL
+        if (!str_contains($src, 'mercator-secret-download')) {
+            return $src;
+        }
+
+        $parts = parse_url($src);
+        if (!$parts || !isset($parts['query'])) {
+            return $src;
+        }
+
+        parse_str($parts['query'], $q);
+        if (empty($q['t'])) {
+            return $src;
+        }
+
+        try {
+            $json = \Illuminate\Support\Facades\Crypt::decryptString($q['t']);
+            $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Throwable $e) {
+            return $src;
+        }
+
+        $mode = $payload['mode'] ?? 'storage';
+
+        if ($mode === 'storage') {
+            $disk = isset($payload['d']) ? (string) $payload['d'] : '';
+            $path = isset($payload['p']) ? trim((string) $payload['p']) : '';
+            return "secret-storage:{$disk}:{$path}";
+        }
+
+        if ($mode === 'url') {
+            $url = isset($payload['u']) ? trim((string) $payload['u']) : '';
+            return "secret-url:{$url}";
+        }
+
+        return $src;
+    }
+
+
     protected string $disk;
     protected ImageManager $manager;
 
@@ -47,6 +97,7 @@ class ImageResizer
 
         try {
             if ($storage->exists($src)) {
+                // Log::info("... exists");
                 return [
                     'mtime' => $storage->lastModified($src),
                     'size'  => $storage->size($src)
@@ -58,18 +109,23 @@ class ImageResizer
 
         // Fallback for absolute paths outside of Storage management
         if (file_exists($src)) {
+            // Log::info("... exists");
             return ['mtime' => filemtime($src), 'size' => filesize($src)];
         }
+        
+        Log::info("QueuedResize $src does not exist");
 
         return ['mtime' => null, 'size' => null];
     }
 
-    public function hash(string $src, ?int $w, ?int $h, array $opts, ?int $mtime = null, ?int $size = null): string
+    public function hash(string $src, ?int $w, ?int $h, array $opts=[], ?int $mtime = null, ?int $size = null): string
     {
         if (!array_key_exists('disk', $opts) || $opts['disk'] === null || $opts['disk'] === '') {
             $opts['disk'] = $this->disk;
         }
         ksort($opts);
+
+        $src = $this->canonicalSrc($src);
 
         return sha1(
             $src . '|' .

@@ -3,7 +3,7 @@
 use System\Classes\PluginBase;
 use App;
 use Mercator\QueuedResize\Classes\ImageResizer;
-// use Log;
+use Log;
 
 class Plugin extends PluginBase
 {
@@ -28,21 +28,13 @@ class Plugin extends PluginBase
         });
     }
 
- public function registerMarkupTags()
-{
-    return [
-        'filters' => [
-            'qresize'  => [$this, 'processQueuedResize'],
-            'qsresize' => function ($src, $w = null, $h = null, $opts = []) {
-                $twig = new \Mercator\QueuedResize\Classes\QSignedResizeTwig();
-                return $twig->qsresize($src, $w, $h, $opts);
-            },
-        ],
-        'functions' => [
-            'qresize' => [$this, 'processQueuedResize'],
-        ],
-    ];
-}
+    public function registerMarkupTags()
+    {
+        return [
+            'filters'   => ['qresize' => [$this, 'processQueuedResize']],
+            'functions' => ['qresize' => [$this, 'processQueuedResize']],
+        ];
+    }
 
     protected function client_supports_webp(): bool
     {
@@ -100,7 +92,7 @@ class Plugin extends PluginBase
         if (!$resizer->exists($hash, $format)) {
             dispatch((new \Mercator\QueuedResize\Jobs\ProcessImageResize($src, $W, $H, $opts))
                 ->onQueue(config('mercator.queuedresize::config.queue', 'imaging')));
-            // Log::info("qresize $src on $disk");
+            Log::info("qresize $src on $disk");
         }
 
         return $resizer->cachedUrl($hash);

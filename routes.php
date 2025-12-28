@@ -152,3 +152,8 @@ Route::get('/queuedresize/{hash}', function (string $hash) {
 
     return response('Processing Error', 500);
 });
+
+Route::get('/qsresize/{hash}', [
+    \Mercator\QueuedResize\Controllers\SignedResizeController::class,
+    'show'
+])->name('mercator.qsresize');
